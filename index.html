@@ -657,16 +657,9 @@ function renderReportBody(){
   return '';
 }
 function reportMonthly(){
-  const rows = monthlyTotals();
+  const rows = monthlyTotals().slice().reverse();
   if(!rows.length) return '<div class="card"><div class="empty">No data yet.</div></div>';
-  const maxVal = Math.max(...rows.map(r=>Math.max(r.income,r.expense)),1);
-  return `<div class="card"><h3>Income vs expense by month</h3>
-    ${rows.map(r=>`
-      <div class="barrow"><div class="barname">${monthLabel(r.month)}</div><div class="bartrack"><div class="barfill" style="width:${r.income/maxVal*100}%; background:var(--income)"></div></div><div class="barval" style="color:var(--income)">+${fmt(r.income)}</div></div>
-      <div class="barrow"><div class="barname"></div><div class="bartrack"><div class="barfill" style="width:${r.expense/maxVal*100}%; background:var(--expense)"></div></div><div class="barval" style="color:var(--expense)">-${fmt(r.expense)}</div></div>
-    `).join('<div class="divider"></div>')}
-  </div>
-  <div class="card"><h3>Monthly net</h3><table><thead><tr><th>Month</th><th class="amt">Income</th><th class="amt">Expense</th><th class="amt">Net</th><th class="amt">Bank balance (EOM)</th></tr></thead><tbody>
+  return `<div class="card"><h3>Monthly net</h3><table><thead><tr><th>Month</th><th class="amt">Income</th><th class="amt">Expense</th><th class="amt">Net</th><th class="amt">Bank balance (EOM)</th></tr></thead><tbody>
     ${rows.map(r=>{
       const eomBal = calcBankBalanceAsOf(r.month+'-31');
       return `<tr><td>${monthLabel(r.month)}</td><td class="amt" style="color:var(--income)">+${fmt(r.income)}</td><td class="amt" style="color:var(--expense)">-${fmt(r.expense)}</td><td class="amt" style="color:${r.net>=0?'var(--income)':'var(--expense)'}">${r.net>=0?'+':''}${fmt(r.net)}</td><td class="amt">${fmt(eomBal)}</td></tr>`;
