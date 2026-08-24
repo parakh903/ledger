@@ -735,12 +735,16 @@ function findCheckpoint(ref){
 }
 function renderCheckpointList(){
   const rows = [];
-  (state.settings.bankSnapshots||[]).forEach(c=> rows.push({...c, account:'Bank account', ref:'bank::'+c.id}));
-  state.loans.forEach(l=> (l.snapshots||[]).forEach(c=> rows.push({...c, account:l.name+' (loan)', ref:l.id+'::'+c.id})));
-  if(!rows.length) return '<div class="empty">No checkpoints added yet.</div>';
+  (state.settings.bankSnapshots||[]).forEach(c=> rows.push({date:c.date, account:'Bank account', detail:fmt(c.balance)+' (checkpoint)', editAttr:`data-editcheckpoint="bank::${c.id}"`, delAttr:`data-delcheckpoint="bank::${c.id}"`}));
+  state.loans.forEach(l=> (l.snapshots||[]).forEach(c=> rows.push({date:c.date, account:l.name+' (loan)', detail:fmt(c.balance)+' (checkpoint)', editAttr:`data-editcheckpoint="${l.id}::${c.id}"`, delAttr:`data-delcheckpoint="${l.id}::${c.id}"`})));
+  state.transactions.filter(t=>t.category==='Other Income'||t.category==='Other Expense').forEach(t=>{
+    const sign = t.category==='Other Income' ? '+' : '-';
+    rows.push({date:t.date, account:'Bank account', detail:sign+fmt(t.amount)+' ('+t.category+' adjustment)', editAttr:`data-edittx="${t.id}"`, delAttr:`data-del="${t.id}"`});
+  });
+  if(!rows.length) return '<div class="empty">No checkpoints or balance adjustments yet.</div>';
   rows.sort((a,b)=> a.date.localeCompare(b.date));
-  return `<table><thead><tr><th>Date</th><th>Account</th><th class="amt">Balance</th><th></th></tr></thead><tbody>
-  ${rows.map(r=>`<tr><td>${r.date}</td><td>${r.account}</td><td class="amt">${fmt(r.balance)}</td><td style="white-space:nowrap;"><button class="delbtn" data-editcheckpoint="${r.ref}" title="Edit">✎</button><button class="delbtn" data-delcheckpoint="${r.ref}" title="Delete">✕</button></td></tr>`).join('')}
+  return `<table><thead><tr><th>Date</th><th>Account</th><th class="amt">Detail</th><th></th></tr></thead><tbody>
+  ${rows.map(r=>`<tr><td>${r.date}</td><td>${r.account}</td><td class="amt">${r.detail}</td><td style="white-space:nowrap;"><button class="delbtn" ${r.editAttr} title="Edit">✎</button><button class="delbtn" ${r.delAttr} title="Delete">✕</button></td></tr>`).join('')}
   </tbody></table>`;
 }
 
@@ -763,7 +767,7 @@ function pageLoans(){
 
   <div class="card">
     <h3>Balance checkpoints</h3>
-    <p class="subnote" style="margin-bottom:12px;"><strong>Bank account:</strong> enter your real balance from your banking app on a given date. If it doesn't match what your entries add up to, the difference is automatically logged as an <strong>Other Income</strong> or <strong>Other Expense</strong> entry for that date — so the gap shows up in your reports instead of silently vanishing. If it already matches, nothing is added.</p>
+    <p class="subnote" style="margin-bottom:12px;"><strong>Bank account:</strong> enter your real balance from your banking app on a given date. If it doesn't match what your entries add up to, the difference is automatically logged as an <strong>Other Income</strong> or <strong>Other Expense</strong> entry for that date — so the gap shows up in your reports instead of silently vanishing. If it already matches exactly, nothing is added (so there's nothing to find in the list below). Everything you've added — checkpoints and auto-adjustments alike — is listed below with edit/delete buttons.</p>
     <p class="subnote" style="margin-bottom:12px;"><strong>Home loans:</strong> since a payment is principal + interest and only the principal reduces the balance, loan payments logged without a "principal portion" don't move the loan balance at all. Add a checkpoint here with the real balance from your statement — for loans this directly resets the reported balance (no transaction is created, since a loan-balance gap usually isn't a cash event).</p>
     <form id="checkpointForm">
       <div class="row">
