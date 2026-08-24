@@ -666,9 +666,14 @@ function reportMonthly(){
       <div class="barrow"><div class="barname"></div><div class="bartrack"><div class="barfill" style="width:${r.expense/maxVal*100}%; background:var(--expense)"></div></div><div class="barval" style="color:var(--expense)">-${fmt(r.expense)}</div></div>
     `).join('<div class="divider"></div>')}
   </div>
-  <div class="card"><h3>Monthly net</h3><table><thead><tr><th>Month</th><th class="amt">Income</th><th class="amt">Expense</th><th class="amt">Net</th></tr></thead><tbody>
-    ${rows.map(r=>`<tr><td>${monthLabel(r.month)}</td><td class="amt" style="color:var(--income)">+${fmt(r.income)}</td><td class="amt" style="color:var(--expense)">-${fmt(r.expense)}</td><td class="amt" style="color:${r.net>=0?'var(--income)':'var(--expense)'}">${r.net>=0?'+':''}${fmt(r.net)}</td></tr>`).join('')}
-  </tbody></table></div>`;
+  <div class="card"><h3>Monthly net</h3><table><thead><tr><th>Month</th><th class="amt">Income</th><th class="amt">Expense</th><th class="amt">Net</th><th class="amt">Bank balance (EOM)</th></tr></thead><tbody>
+    ${rows.map(r=>{
+      const eomBal = calcBankBalanceAsOf(r.month+'-31');
+      return `<tr><td>${monthLabel(r.month)}</td><td class="amt" style="color:var(--income)">+${fmt(r.income)}</td><td class="amt" style="color:var(--expense)">-${fmt(r.expense)}</td><td class="amt" style="color:${r.net>=0?'var(--income)':'var(--expense)'}">${r.net>=0?'+':''}${fmt(r.net)}</td><td class="amt">${fmt(eomBal)}</td></tr>`;
+    }).join('')}
+  </tbody></table>
+  <p class="subnote" style="margin-top:10px;">"Bank balance (EOM)" is your calculated bank balance at the end of that month — the same figure the Bank Running Balance report would show for the last day of that month.</p>
+  </div>`;
 }
 function reportBank(){
   const tl = bankTimeline();
