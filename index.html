@@ -147,6 +147,16 @@ td.amt, th.amt{text-align:right; font-family:'IBM Plex Mono',monospace;}
 }
 .netbadge-detail{font-size:12px; color:var(--muted);}
 .netbadge-value{font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:15px; white-space:nowrap;}
+.monthrow{padding:16px 4px; border-bottom:1px solid var(--line);}
+.monthrow:last-child{border-bottom:none;}
+.monthrow-top{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; gap:10px;}
+.monthrow-label{font-family:'Fraunces',serif; font-weight:600; font-size:16px;}
+.monthrow-net{font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:16px; white-space:nowrap;}
+.monthrow-sub{display:flex; gap:16px; font-size:12.5px; color:var(--muted); font-family:'IBM Plex Mono',monospace; margin-bottom:10px;}
+.monthrow-balance{display:flex; justify-content:space-between; align-items:center; background:var(--surface-2); border-radius:8px; padding:9px 12px;}
+.monthrow-balance .bal-label{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em;}
+.monthrow-balance .bal-val{font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:14px;}
+.monthrow-trend{font-size:11.5px; font-family:'IBM Plex Mono',monospace; text-align:right; margin-top:5px;}
 
 /* ---------- Mobile: bottom tab bar like an iOS app ---------- */
 #bottomnav{display:none;}
@@ -659,14 +669,26 @@ function renderReportBody(){
 function reportMonthly(){
   const rows = monthlyTotals().slice().reverse();
   if(!rows.length) return '<div class="card"><div class="empty">No data yet.</div></div>';
-  return `<div class="card"><h3>Monthly net</h3><table><thead><tr><th>Month</th><th class="amt">Income</th><th class="amt">Expense</th><th class="amt">Net</th><th class="amt">Bank balance (EOM)</th></tr></thead><tbody>
-    ${rows.map(r=>{
-      const eomBal = calcBankBalanceAsOf(r.month+'-31');
-      return `<tr><td>${monthLabel(r.month)}</td><td class="amt" style="color:var(--income)">+${fmt(r.income)}</td><td class="amt" style="color:var(--expense)">-${fmt(r.expense)}</td><td class="amt" style="color:${r.net>=0?'var(--income)':'var(--expense)'}">${r.net>=0?'+':''}${fmt(r.net)}</td><td class="amt">${fmt(eomBal)}</td></tr>`;
+  const withBal = rows.map(r=>({...r, eomBal: calcBankBalanceAsOf(r.month+'-31')}));
+  return `<div class="card"><h3>Monthly net</h3>
+    ${withBal.map((r,i)=>{
+      const prev = withBal[i+1];
+      let trendHtml = '';
+      if(prev){
+        const delta = r.eomBal - prev.eomBal;
+        const arrow = delta>0?'▲':delta<0?'▼':'—';
+        const color = delta>0?'var(--income)':delta<0?'var(--expense)':'var(--muted)';
+        trendHtml = `<div class="monthrow-trend" style="color:${color}">${arrow} ${fmt(Math.abs(delta))} vs previous month</div>`;
+      }
+      return `<div class="monthrow">
+        <div class="monthrow-top"><span class="monthrow-label">${monthLabel(r.month)}</span><span class="monthrow-net" style="color:${r.net>=0?'var(--income)':'var(--expense)'}">${r.net>=0?'+':''}${fmt(r.net)}</span></div>
+        <div class="monthrow-sub"><span style="color:var(--income)">+${fmt(r.income)} income</span><span style="color:var(--expense)">-${fmt(r.expense)} expense</span></div>
+        <div class="monthrow-balance"><span class="bal-label">Bank balance (EOM)</span><span class="bal-val">${fmt(r.eomBal)}</span></div>
+        ${trendHtml}
+      </div>`;
     }).join('')}
-  </tbody></table>
-  <p class="subnote" style="margin-top:10px;">"Bank balance (EOM)" is your calculated bank balance at the end of that month — the same figure the Bank Running Balance report would show for the last day of that month.</p>
-  </div>`;
+  </div>
+  <p class="subnote" style="margin-top:2px; padding:0 4px;">"Bank balance (EOM)" is your calculated balance at the end of that month. The trend line compares it to the month before.</p>`;
 }
 function reportBank(){
   const tl = bankTimeline();
