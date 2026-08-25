@@ -157,6 +157,13 @@ td.amt, th.amt{text-align:right; font-family:'IBM Plex Mono',monospace;}
 .monthrow-balance .bal-label{font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em;}
 .monthrow-balance .bal-val{font-family:'IBM Plex Mono',monospace; font-weight:700; font-size:14px;}
 .monthrow-trend{font-size:11.5px; font-family:'IBM Plex Mono',monospace; text-align:right; margin-top:5px;}
+.cardgroup{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); margin-bottom:16px; overflow:hidden;}
+.cardgroup summary{cursor:pointer; padding:18px 20px; display:flex; align-items:center; gap:10px; list-style:none; font-family:'Fraunces',serif; font-weight:600; font-size:16px;}
+.cardgroup summary::-webkit-details-marker{display:none;}
+.cardgroup summary .mgcaret{color:var(--muted); font-size:12px; transition:transform .15s; flex-shrink:0;}
+.cardgroup[open] summary .mgcaret{transform:rotate(90deg);}
+.cardgroup-body{padding:0 20px 20px;}
+.danger-card{border-color:rgba(193,82,61,.35) !important;}
 
 /* ---------- Mobile: bottom tab bar like an iOS app ---------- */
 #bottomnav{display:none;}
@@ -724,10 +731,24 @@ function reportMonthly(){
 function reportBank(){
   const tl = bankTimeline();
   const cur = tl[tl.length-1].balance;
+  const reversed = tl.slice().reverse();
+  const yearMap = {};
+  reversed.forEach(r=>{ const yr = (r.date||'').slice(0,4) || 'Unknown'; if(!yearMap[yr]) yearMap[yr]=[]; yearMap[yr].push(r); });
+  const years = Object.keys(yearMap).sort().reverse();
+  const rowHtml = r=>`<tr><td>${r.date}</td><td>${r.checkpoint?'<strong>'+r.label+'</strong>':r.label}</td><td class="amt" style="color:${r.delta>0?'var(--income)':r.delta<0?'var(--expense)':'var(--muted)'}">${r.delta===0?'—':(r.delta>0?'+':'')+fmt(r.delta)}</td><td class="amt">${fmt(r.balance)}</td><td>${r.id?`<button class="delbtn" data-edittx="${r.id}" title="Edit">✎</button><button class="delbtn" data-del="${r.id}" title="Delete">✕</button>`:(r.checkpoint&&r.cpId?`<button class="delbtn" data-editcheckpoint="bank::${r.cpId}" title="Edit">✎</button>`:'')}</td></tr>`;
   return `<div class="statgrid"><div class="stat"><div class="label">Current bank balance</div><div class="value ${cur>=0?'pos':'neg'}">${fmt(cur)}</div></div></div>
-  <div class="card"><h3>Running balance</h3><table><thead><tr><th>Date</th><th>Entry</th><th class="amt">Change</th><th class="amt">Balance</th><th></th></tr></thead><tbody>
-  ${tl.slice().reverse().map(r=>`<tr><td>${r.date}</td><td>${r.checkpoint?'<strong>'+r.label+'</strong>':r.label}</td><td class="amt" style="color:${r.delta>0?'var(--income)':r.delta<0?'var(--expense)':'var(--muted)'}">${r.delta===0?'—':(r.delta>0?'+':'')+fmt(r.delta)}</td><td class="amt">${fmt(r.balance)}</td><td>${r.id?`<button class="delbtn" data-edittx="${r.id}" title="Edit">✎</button><button class="delbtn" data-del="${r.id}" title="Delete">✕</button>`:(r.checkpoint&&r.cpId?`<button class="delbtn" data-editcheckpoint="bank::${r.cpId}" title="Edit">✎</button>`:'')}</td></tr>`).join('')}
-  </tbody></table></div>`;
+  <div class="row" style="margin-bottom:16px; gap:8px;">
+    <button class="btn btn-ghost" type="button" data-expandall="1" data-expandscope="reportBody" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Expand all years</button>
+    <button class="btn btn-ghost" type="button" data-expandall="0" data-expandscope="reportBody" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Collapse all years</button>
+  </div>
+  <div class="card"><h3>Running balance</h3>
+  ${years.map((yr,i)=>`<details class="monthgroup" ${i===0?'open':''}>
+    <summary><span class="mgcaret">▸</span><span class="mglabel">${yr}</span><span class="mgtotal">${yearMap[yr].length} entr${yearMap[yr].length===1?'y':'ies'}</span></summary>
+    <div class="monthbody"><table><thead><tr><th>Date</th><th>Entry</th><th class="amt">Change</th><th class="amt">Balance</th><th></th></tr></thead><tbody>
+    ${yearMap[yr].map(rowHtml).join('')}
+    </tbody></table></div>
+  </details>`).join('')}
+  </div>`;
 }
 function reportLoans(){
   if(!state.loans.length) return '<div class="card"><div class="empty">No loans set up yet. Add one in Loans & Setup.</div></div>';
@@ -803,9 +824,15 @@ function renderCheckpointList(){
 function pageLoans(){
   return `
   <div class="pagehead"><h2>Loans & Setup</h2><p>Manage home loans and your bank opening balance</p></div>
+  <div class="row" style="margin-bottom:16px; gap:8px;">
+    <button class="btn btn-ghost" type="button" data-expandall="1" data-expandscope="setupGroups" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Expand all</button>
+    <button class="btn btn-ghost" type="button" data-expandall="0" data-expandscope="setupGroups" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Collapse all</button>
+  </div>
+  <div id="setupGroups">
 
-  <div class="card">
-    <h3>Bank account opening balance</h3>
+  <details class="cardgroup monthgroup" open>
+    <summary><span class="mgcaret">▸</span><span class="mglabel">Bank account opening balance</span></summary>
+    <div class="cardgroup-body">
     <p class="subnote" style="margin-bottom:12px;">This is the earliest point your ledger knows about. If you have entries going back further, add a balance checkpoint below instead of moving this.</p>
     <form id="settingsForm">
       <div class="row">
@@ -814,10 +841,12 @@ function pageLoans(){
       </div>
       <button class="btn" type="submit">Save</button>
     </form>
-  </div>
+    </div>
+  </details>
 
-  <div class="card">
-    <h3>Balance checkpoints</h3>
+  <details class="cardgroup monthgroup" open>
+    <summary><span class="mgcaret">▸</span><span class="mglabel">Balance checkpoints</span></summary>
+    <div class="cardgroup-body">
     <p class="subnote" style="margin-bottom:12px;"><strong>Bank account:</strong> enter your real balance from your banking app on a given date. If it doesn't match what your entries add up to, the difference is automatically logged as an <strong>Other Income</strong> or <strong>Other Expense</strong> entry for that date — so the gap shows up in your reports instead of silently vanishing. If it already matches exactly, nothing is added (so there's nothing to find in the list below). Everything you've added — checkpoints and auto-adjustments alike — is listed below with edit/delete buttons.</p>
     <p class="subnote" style="margin-bottom:12px;"><strong>Home loans:</strong> since a payment is principal + interest and only the principal reduces the balance, loan payments logged without a "principal portion" don't move the loan balance at all. Add a checkpoint here with the real balance from your statement — for loans this directly resets the reported balance (no transaction is created, since a loan-balance gap usually isn't a cash event).</p>
     <form id="checkpointForm">
@@ -835,10 +864,12 @@ function pageLoans(){
       </div>
     </form>
     ${renderCheckpointList()}
-  </div>
+    </div>
+  </details>
 
-  <div class="card">
-    <h3>Categories</h3>
+  <details class="cardgroup monthgroup">
+    <summary><span class="mgcaret">▸</span><span class="mglabel">Categories</span></summary>
+    <div class="cardgroup-body">
     <p class="subnote" style="margin-bottom:12px;">One shared list for both expenses and income. Tip: if you get a refund, log it as <em>income</em> under the same category as the original expense (e.g. "Transport") — the category breakdown report will automatically net it off.</p>
     <form id="catForm" class="field" style="max-width:340px;">
       <label>Add category</label>
@@ -848,11 +879,14 @@ function pageLoans(){
     <div>
       ${state.categories.map(c=>`<span class="tag loan" style="margin:0 6px 6px 0; display:inline-flex; align-items:center; gap:6px;">${c}<button class="delbtn" style="padding:0; color:inherit;" data-delcat="${c}">✕</button></span>`).join('')}
     </div>
-  </div>
+    </div>
+  </details>
 
-  <div class="card">
-    <h3>Bulk add entries</h3>
-    <p class="subnote" style="margin-bottom:12px;">Got a batch of old monthly values to enter — e.g. a year of income for a category? Download the template below, fill it in (Excel, Numbers, Google Sheets, or even Notes), then upload it here. This only <strong>adds</strong> new entries — it never touches or replaces anything already in your ledger.</p>
+  <details class="cardgroup monthgroup">
+    <summary><span class="mgcaret">▸</span><span class="mglabel">Bulk add entries</span></summary>
+    <div class="cardgroup-body">
+    <p class="subnote" style="margin-bottom:12px;">Got a batch of old monthly values to enter — income, expenses, or even bank balances for past dates? Download the template below, fill it in (Excel, Numbers, Google Sheets, or even Notes), then upload it here. This only <strong>adds</strong> new entries — it never touches or replaces anything already in your ledger.</p>
+    <p class="subnote" style="margin-bottom:12px;">To bulk-add historical <strong>bank balances</strong>, use type <code>balance_checkpoint</code> with the balance in the amount column — these get reconciled in date order exactly like adding checkpoints one by one, auto-creating Other Income/Expense entries for any gap.</p>
     <div class="row" style="margin-bottom:14px;">
       <button class="btn btn-ghost" type="button" id="downloadCsvTemplateBtn" style="flex:0 0 auto;">Download CSV template</button>
     </div>
@@ -861,10 +895,12 @@ function pageLoans(){
       <input type="file" id="bulkCsvFile" accept=".csv,text/csv">
     </div>
     <div id="bulkImportResult"></div>
-  </div>
+    </div>
+  </details>
 
-  <div class="card">
-    <h3>${editingLoanId?'Edit loan':'Add a home loan'}</h3>
+  <details class="cardgroup monthgroup">
+    <summary><span class="mgcaret">▸</span><span class="mglabel">${editingLoanId?'Edit loan':'Add a home loan'}</span></summary>
+    <div class="cardgroup-body">
     <form id="loanForm">
       <div class="field"><label>Loan name</label><input type="text" name="name" placeholder="e.g. Maple St Home Loan" required value="${editingLoanId? escapeHtml(state.loans.find(l=>l.id===editingLoanId).name):''}"></div>
       <div class="row">
@@ -880,22 +916,37 @@ function pageLoans(){
         ${editingLoanId?`<button class="btn btn-ghost" type="button" id="cancelLoanEditBtn" style="flex:0 0 auto;">Cancel</button>`:''}
       </div>
     </form>
-  </div>
+    </div>
+  </details>
 
-  <div class="card">
-    <h3>Your loans</h3>
+  <details class="cardgroup monthgroup">
+    <summary><span class="mgcaret">▸</span><span class="mglabel">Your loans</span></summary>
+    <div class="cardgroup-body">
     ${state.loans.length? `<table><thead><tr><th>Name</th><th>Type</th><th class="amt">Opening</th><th class="amt">Current</th><th></th></tr></thead><tbody>
     ${state.loans.map(l=>`<tr><td>${l.name}</td><td><span class="tag ${l.type==='investment'?'rental':'loan'}">${l.type==='investment'?'Investment':'Owner-occupied'}</span></td><td class="amt">${fmt(l.openingBalance)}</td><td class="amt">${fmt(loanBalance(l))}</td><td style="white-space:nowrap;"><button class="delbtn" data-editloan="${l.id}" title="Edit">✎</button><button class="delbtn" data-delloan="${l.id}" title="Delete">✕</button></td></tr>`).join('')}
     </tbody></table>` : '<div class="empty">No loans added yet.</div>'}
-  </div>
+    </div>
+  </details>
 
-  <div class="card">
-    <h3>Backup</h3>
-    <p class="subnote" style="margin-bottom:12px;">Export everything as a JSON file, or restore from a previous export.</p>
+  <details class="cardgroup monthgroup">
+    <summary><span class="mgcaret">▸</span><span class="mglabel">Backup</span></summary>
+    <div class="cardgroup-body">
+    <p class="subnote" style="margin-bottom:12px;">Export everything as a JSON file, or restore from a previous export. <strong>Import fully replaces</strong> all current data — use Bulk Add above instead if you just want to add entries.</p>
     <div class="row">
       <button class="btn btn-ghost" id="exportBtn" type="button">Export data</button>
-      <label class="btn btn-ghost" style="text-align:center; cursor:pointer;">Import data<input type="file" id="importFile" accept="application/json" style="display:none;"></label>
+      <label class="btn btn-ghost" style="text-align:center; cursor:pointer;">Import data (replaces everything)<input type="file" id="importFile" accept="application/json" style="display:none;"></label>
     </div>
+    </div>
+  </details>
+
+  <details class="cardgroup monthgroup danger-card">
+    <summary><span class="mgcaret">▸</span><span class="mglabel" style="color:var(--expense);">Danger zone</span></summary>
+    <div class="cardgroup-body">
+    <p class="subnote" style="margin-bottom:12px;">Permanently erases every transaction, loan, checkpoint, and category, resetting the app to a blank slate. There's no undo — export a backup first if there's any chance you'll want this data again.</p>
+    <button class="btn" type="button" id="eraseAllBtn" style="background:var(--expense); color:#fff;">Erase all data</button>
+    </div>
+  </details>
+
   </div>
   `;
 }
@@ -914,7 +965,9 @@ function attachHandlers(){
   document.querySelectorAll('[data-expandall]').forEach(el=>{
     el.onclick = ()=>{
       const open = el.dataset.expandall==='1';
-      document.querySelectorAll('.monthgroup').forEach(d=>{ if(open) d.setAttribute('open',''); else d.removeAttribute('open'); });
+      const scopeId = el.dataset.expandscope;
+      const container = scopeId ? document.getElementById(scopeId) : document;
+      if(container) container.querySelectorAll('.monthgroup').forEach(d=>{ if(open) d.setAttribute('open',''); else d.removeAttribute('open'); });
     };
   });
   document.querySelectorAll('[data-del]').forEach(el=>{
@@ -1076,7 +1129,8 @@ function attachHandlers(){
       anyLoan ? `2024-01-05,loan_payment,,2200,,${anyLoan.name},650` : '2024-01-05,loan_payment,,2200,,Exact loan name from Loans & Setup,650',
       invLoan ? `2024-01-01,rental_income,,1800,,${invLoan.name},` : '2024-01-01,rental_income,,1800,,Exact investment loan name,',
       '2024-01-10,lottery_expense,,20,,,',
-      '2024-01-12,lottery_income,,50,,,'
+      '2024-01-12,lottery_income,,50,,,',
+      '2024-01-31,balance_checkpoint,,15230.55,,,'
     ];
     const blob = new Blob([lines.join('\n')], {type:'text/csv'});
     const url = URL.createObjectURL(blob);
@@ -1092,8 +1146,9 @@ function attachHandlers(){
       const rows = parseCSV(reader.result);
       const resultBoxNow = document.getElementById('bulkImportResult');
       if(!rows.length){ if(resultBoxNow) resultBoxNow.innerHTML = '<div class="empty">No rows found in that file.</div>'; return; }
-      const validTypes = ['expense','income','loan_payment','rental_income','lottery_expense','lottery_income'];
+      const validTypes = ['expense','income','loan_payment','rental_income','lottery_expense','lottery_income','balance_checkpoint'];
       const added = [];
+      const checkpointRows = [];
       const errors = [];
       rows.forEach((r,idx)=>{
         const lineNum = idx+2;
@@ -1103,6 +1158,7 @@ function attachHandlers(){
         if(!validTypes.includes(type)){ errors.push(`Row ${lineNum}: unknown type "${r.type||''}"`); return; }
         const amount = parseFloat(r.amount);
         if(isNaN(amount) || amount<0){ errors.push(`Row ${lineNum}: invalid amount "${r.amount||''}"`); return; }
+        if(type==='balance_checkpoint'){ checkpointRows.push({date, balance:amount}); return; }
         const tx = {id:uid(), date, type, amount, notes: r.notes||''};
         if(type==='expense' || type==='income'){
           const cat = (r.category||'').trim();
@@ -1122,12 +1178,31 @@ function attachHandlers(){
         }
         added.push(tx);
       });
+      if(added.length) state.transactions.push(...added);
+      let reconciledCount = 0, matchedCount = 0;
+      if(checkpointRows.length){
+        checkpointRows.sort((a,b)=> a.date.localeCompare(b.date));
+        checkpointRows.forEach(cp=>{
+          const calculated = calcBankBalanceAsOf(cp.date);
+          const diff = cp.balance - calculated;
+          if(Math.abs(diff) < 0.005){ matchedCount++; return; }
+          const adjTx = {
+            id: uid(), date: cp.date,
+            type: diff>0 ? 'income' : 'expense',
+            category: diff>0 ? 'Other Income' : 'Other Expense',
+            amount: Math.abs(diff),
+            notes: 'Auto-added to reconcile to bulk-imported balance of '+fmt(cp.balance)
+          };
+          state.transactions.push(adjTx);
+          added.push(adjTx);
+          reconciledCount++;
+        });
+      }
       if(added.length){
-        state.transactions.push(...added);
         saveTransactions();
         saveCategories();
       }
-      let html = `<div class="netbadge" style="border-left-color:${added.length?'var(--income)':'var(--expense)'}; margin-top:14px;"><div class="netbadge-detail">${added.length} entr${added.length===1?'y':'ies'} added${errors.length?`, ${errors.length} row${errors.length===1?'':'s'} skipped`:''}</div></div>`;
+      let html = `<div class="netbadge" style="border-left-color:${added.length?'var(--income)':'var(--expense)'}; margin-top:14px;"><div class="netbadge-detail">${added.length} entr${added.length===1?'y':'ies'} added${reconciledCount?` (incl. ${reconciledCount} balance adjustment${reconciledCount===1?'':'s'})`:''}${matchedCount?`, ${matchedCount} balance${matchedCount===1?'':'s'} already matched — nothing added for those`:''}${errors.length?`, ${errors.length} row${errors.length===1?'':'s'} skipped`:''}</div></div>`;
       if(errors.length){
         html += `<div class="subnote" style="margin-top:8px;"><strong>Skipped rows:</strong><br>${errors.map(er=>escapeHtml(er)).join('<br>')}</div>`;
       }
@@ -1136,6 +1211,20 @@ function attachHandlers(){
       if(resultBox) resultBox.innerHTML = html;
     };
     reader.readAsText(file);
+  };
+  const eraseAllBtn = document.getElementById('eraseAllBtn');
+  if(eraseAllBtn) eraseAllBtn.onclick = ()=>{
+    showConfirm('Erase ALL data — every transaction, loan, checkpoint, and category? This cannot be undone.', ()=>{
+      state.transactions = [];
+      state.loans = [];
+      state.categories = [...DEFAULT_CATEGORIES];
+      state.settings = { bankOpeningBalance:0, bankOpeningDate: todayStr(), bankSnapshots:[] };
+      Promise.all([saveTransactions(), saveLoans(), saveCategories(), saveSettings()]).then(()=>{
+        showToast('All data erased');
+        currentTab = 'dashboard';
+        render();
+      });
+    }, 'Erase everything');
   };
   const exportBtn = document.getElementById('exportBtn');
   if(exportBtn) exportBtn.onclick = ()=>{
