@@ -367,9 +367,13 @@ function transposeToCategory(monthMap){
 }
 function reportCategories(){
   return `
-  <div class="chips" style="margin-bottom:16px;">
+  <div class="chips" style="margin-bottom:10px;">
     <div class="chip ${categoryViewMode==='month'?'active':''}" data-catview="month">Month → categories</div>
     <div class="chip ${categoryViewMode==='category'?'active':''}" data-catview="category">Category → months</div>
+  </div>
+  <div class="row" style="margin-bottom:16px; gap:8px;">
+    <button class="btn btn-ghost" type="button" data-expandall="1" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Expand all</button>
+    <button class="btn btn-ghost" type="button" data-expandall="0" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Collapse all</button>
   </div>
   ${categoryViewMode==='month' ? reportCategoriesByMonth() : reportCategoriesByCategory()}
   `;
@@ -578,6 +582,33 @@ function renderTxTable(list, deletable){
   </tbody></table>`;
 }
 function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+function parseCSV(text){
+  const rows = [];
+  let i=0, field='', row=[], inQuotes=false;
+  const pushField = ()=>{ row.push(field); field=''; };
+  const pushRow = ()=>{ rows.push(row); row=[]; };
+  while(i<text.length){
+    const c = text[i];
+    if(inQuotes){
+      if(c==='"'){ if(text[i+1]==='"'){ field+='"'; i+=2; continue; } inQuotes=false; i++; continue; }
+      field+=c; i++; continue;
+    } else {
+      if(c==='"'){ inQuotes=true; i++; continue; }
+      if(c===','){ pushField(); i++; continue; }
+      if(c==='\r'){ i++; continue; }
+      if(c==='\n'){ pushField(); pushRow(); i++; continue; }
+      field+=c; i++; continue;
+    }
+  }
+  if(field.length || row.length){ pushField(); pushRow(); }
+  if(!rows.length) return [];
+  const headers = rows[0].map(h=>h.trim().toLowerCase());
+  return rows.slice(1).filter(r=>r.some(c=>(c||'').trim()!=='')).map(r=>{
+    const obj = {};
+    headers.forEach((h,idx)=> obj[h] = (r[idx]||'').trim());
+    return obj;
+  });
+}
 
 /* ============ PAGE: ADD ENTRY ============ */
 function pageAdd(){
@@ -820,6 +851,19 @@ function pageLoans(){
   </div>
 
   <div class="card">
+    <h3>Bulk add entries</h3>
+    <p class="subnote" style="margin-bottom:12px;">Got a batch of old monthly values to enter — e.g. a year of income for a category? Download the template below, fill it in (Excel, Numbers, Google Sheets, or even Notes), then upload it here. This only <strong>adds</strong> new entries — it never touches or replaces anything already in your ledger.</p>
+    <div class="row" style="margin-bottom:14px;">
+      <button class="btn btn-ghost" type="button" id="downloadCsvTemplateBtn" style="flex:0 0 auto;">Download CSV template</button>
+    </div>
+    <div class="field">
+      <label>Upload filled-in CSV</label>
+      <input type="file" id="bulkCsvFile" accept=".csv,text/csv">
+    </div>
+    <div id="bulkImportResult"></div>
+  </div>
+
+  <div class="card">
     <h3>${editingLoanId?'Edit loan':'Add a home loan'}</h3>
     <form id="loanForm">
       <div class="field"><label>Loan name</label><input type="text" name="name" placeholder="e.g. Maple St Home Loan" required value="${editingLoanId? escapeHtml(state.loans.find(l=>l.id===editingLoanId).name):''}"></div>
@@ -866,6 +910,12 @@ function attachHandlers(){
   });
   document.querySelectorAll('[data-catview]').forEach(el=>{
     el.onclick = ()=>{ categoryViewMode = el.dataset.catview; document.getElementById('reportBody').innerHTML = renderReportBody(); attachHandlers(); };
+  });
+  document.querySelectorAll('[data-expandall]').forEach(el=>{
+    el.onclick = ()=>{
+      const open = el.dataset.expandall==='1';
+      document.querySelectorAll('.monthgroup').forEach(d=>{ if(open) d.setAttribute('open',''); else d.removeAttribute('open'); });
+    };
   });
   document.querySelectorAll('[data-del]').forEach(el=>{
     el.onclick = ()=> showConfirm('Delete this entry? This can\'t be undone.', ()=>{ deleteTransaction(el.dataset.del); showToast('Entry deleted'); });
@@ -1015,6 +1065,78 @@ function attachHandlers(){
       }, 'Remove');
     };
   });
+  const downloadCsvTemplateBtn = document.getElementById('downloadCsvTemplateBtn');
+  if(downloadCsvTemplateBtn) downloadCsvTemplateBtn.onclick = ()=>{
+    const invLoan = state.loans.find(l=>l.type==='investment');
+    const anyLoan = state.loans[0];
+    const lines = [
+      'date,type,category,amount,notes,loan_name,principal',
+      '2024-01-15,income,Salary,5000,,,',
+      '2024-01-20,expense,Groceries,320.50,,,',
+      anyLoan ? `2024-01-05,loan_payment,,2200,,${anyLoan.name},650` : '2024-01-05,loan_payment,,2200,,Exact loan name from Loans & Setup,650',
+      invLoan ? `2024-01-01,rental_income,,1800,,${invLoan.name},` : '2024-01-01,rental_income,,1800,,Exact investment loan name,',
+      '2024-01-10,lottery_expense,,20,,,',
+      '2024-01-12,lottery_income,,50,,,'
+    ];
+    const blob = new Blob([lines.join('\n')], {type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'ledger-bulk-template.csv';
+    a.click(); URL.revokeObjectURL(url);
+  };
+  const bulkCsvFile = document.getElementById('bulkCsvFile');
+  if(bulkCsvFile) bulkCsvFile.onchange = (e)=>{
+    const file = e.target.files[0]; if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      const rows = parseCSV(reader.result);
+      const resultBoxNow = document.getElementById('bulkImportResult');
+      if(!rows.length){ if(resultBoxNow) resultBoxNow.innerHTML = '<div class="empty">No rows found in that file.</div>'; return; }
+      const validTypes = ['expense','income','loan_payment','rental_income','lottery_expense','lottery_income'];
+      const added = [];
+      const errors = [];
+      rows.forEach((r,idx)=>{
+        const lineNum = idx+2;
+        const date = r.date;
+        const type = (r.type||'').trim();
+        if(!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)){ errors.push(`Row ${lineNum}: invalid or missing date "${r.date||''}" (need YYYY-MM-DD)`); return; }
+        if(!validTypes.includes(type)){ errors.push(`Row ${lineNum}: unknown type "${r.type||''}"`); return; }
+        const amount = parseFloat(r.amount);
+        if(isNaN(amount) || amount<0){ errors.push(`Row ${lineNum}: invalid amount "${r.amount||''}"`); return; }
+        const tx = {id:uid(), date, type, amount, notes: r.notes||''};
+        if(type==='expense' || type==='income'){
+          const cat = (r.category||'').trim();
+          if(!cat){ errors.push(`Row ${lineNum}: missing category for ${type}`); return; }
+          tx.category = cat;
+          if(!state.categories.includes(cat)) state.categories.push(cat);
+        }
+        if(type==='loan_payment' || type==='rental_income'){
+          const loanName = (r.loan_name||'').trim();
+          const loan = state.loans.find(l=> l.name.trim().toLowerCase()===loanName.toLowerCase());
+          if(!loan){ errors.push(`Row ${lineNum}: no loan found named "${loanName}"`); return; }
+          tx.loanId = loan.id;
+          if(type==='loan_payment'){
+            const p = parseFloat(r.principal);
+            tx.principal = (r.principal && !isNaN(p)) ? p : null;
+          }
+        }
+        added.push(tx);
+      });
+      if(added.length){
+        state.transactions.push(...added);
+        saveTransactions();
+        saveCategories();
+      }
+      let html = `<div class="netbadge" style="border-left-color:${added.length?'var(--income)':'var(--expense)'}; margin-top:14px;"><div class="netbadge-detail">${added.length} entr${added.length===1?'y':'ies'} added${errors.length?`, ${errors.length} row${errors.length===1?'':'s'} skipped`:''}</div></div>`;
+      if(errors.length){
+        html += `<div class="subnote" style="margin-top:8px;"><strong>Skipped rows:</strong><br>${errors.map(er=>escapeHtml(er)).join('<br>')}</div>`;
+      }
+      if(added.length){ render(); showToast(`Added ${added.length} entries`); }
+      const resultBox = document.getElementById('bulkImportResult');
+      if(resultBox) resultBox.innerHTML = html;
+    };
+    reader.readAsText(file);
+  };
   const exportBtn = document.getElementById('exportBtn');
   if(exportBtn) exportBtn.onclick = ()=>{
     const data = JSON.stringify({transactions:state.transactions, loans:state.loans, settings:state.settings, categories:state.categories}, null, 2);
