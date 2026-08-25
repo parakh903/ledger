@@ -279,6 +279,13 @@ async function loadState(){
     if(t.type==='lottery_expense'){ t.type='expense'; t.category='Lottery'; migrated=true; }
     if(t.type==='lottery_income'){ t.type='income'; t.category='Lottery'; migrated=true; }
   });
+  state.transactions.forEach(t=>{
+    if(!t.isBalanceCheckpoint && typeof t.notes==='string' && t.notes.indexOf('Auto-added to reconcile')===0){
+      t.isBalanceCheckpoint = true;
+      t.checkpointBalance = calcBankBalanceAsOf(t.date);
+      migrated = true;
+    }
+  });
   if(migrated) saveTransactions();
   state.loaded = true;
   render();
@@ -825,7 +832,7 @@ function renderCheckpointList(){
     rows.push({date:t.date, account:'Bank account', detail:sign+fmt(t.amount)+' ('+t.category+', manual)', editAttr:`data-edittx="${t.id}"`, delAttr:`data-del="${t.id}"`});
   });
   if(!rows.length) return '<div class="empty">No checkpoints or balance adjustments yet.</div>';
-  rows.sort((a,b)=> a.date.localeCompare(b.date));
+  rows.sort((a,b)=> b.date.localeCompare(a.date));
   return `<table><thead><tr><th>Date</th><th>Account</th><th class="amt">Detail</th><th></th></tr></thead><tbody>
   ${rows.map(r=>`<tr><td>${r.date}</td><td>${r.account}</td><td class="amt">${r.detail}</td><td style="white-space:nowrap;"><button class="delbtn" ${r.editAttr} title="Edit">✎</button><button class="delbtn" ${r.delAttr} title="Delete">✕</button></td></tr>`).join('')}
   </tbody></table>
