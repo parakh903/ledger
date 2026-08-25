@@ -580,6 +580,10 @@ function pageDashboard(){
   </div>
   `;
 }
+function editDeleteButtons(t){
+  if(t.isBalanceCheckpoint) return `<button class="delbtn" data-editcheckpoint="banktx::${t.id}" title="Edit balance">✎</button><button class="delbtn" data-del="${t.id}" title="Delete">✕</button>`;
+  return `<button class="delbtn" data-edittx="${t.id}" title="Edit">✎</button><button class="delbtn" data-del="${t.id}" title="Delete">✕</button>`;
+}
 function renderTxTable(list, deletable){
   return `<table><thead><tr><th>Date</th><th>Type</th><th>Detail</th><th class="amt">Amount</th>${deletable?'<th></th>':''}</tr></thead><tbody>
   ${list.map(t=>{
@@ -590,7 +594,7 @@ function renderTxTable(list, deletable){
       <td><span class="tag ${meta.tag}">${meta.label}</span></td>
       <td>${describeTx(t)}${t.notes?' <span style="color:var(--muted)">— '+escapeHtml(t.notes)+'</span>':''}</td>
       <td class="amt ${d>=0?'pos':'neg'}" style="color:${d>=0?'var(--income)':'var(--expense)'}">${d>=0?'+':''}${fmt(d)}</td>
-      ${deletable?`<td style="white-space:nowrap;"><button class="delbtn" data-edittx="${t.id}" title="Edit">✎</button><button class="delbtn" data-del="${t.id}" title="Delete">✕</button></td>`:''}
+      ${deletable?`<td style="white-space:nowrap;">${editDeleteButtons(t)}</td>`:''}
     </tr>`;
   }).join('')}
   </tbody></table>`;
@@ -734,7 +738,11 @@ function reportBank(){
   const yearMap = {};
   reversed.forEach(r=>{ const yr = (r.date||'').slice(0,4) || 'Unknown'; if(!yearMap[yr]) yearMap[yr]=[]; yearMap[yr].push(r); });
   const years = Object.keys(yearMap).sort().reverse();
-  const rowHtml = r=>`<tr><td>${r.date}</td><td>${r.checkpoint?'<strong>'+r.label+'</strong>':r.label}</td><td class="amt" style="color:${r.delta>0?'var(--income)':r.delta<0?'var(--expense)':'var(--muted)'}">${r.delta===0?'—':(r.delta>0?'+':'')+fmt(r.delta)}</td><td class="amt">${fmt(r.balance)}</td><td>${r.id?`<button class="delbtn" data-edittx="${r.id}" title="Edit">✎</button><button class="delbtn" data-del="${r.id}" title="Delete">✕</button>`:(r.checkpoint&&r.cpId?`<button class="delbtn" data-editcheckpoint="bank::${r.cpId}" title="Edit">✎</button>`:'')}</td></tr>`;
+  const rowHtml = r=>{
+    const tx = r.id ? state.transactions.find(x=>x.id===r.id) : null;
+    const actions = tx ? editDeleteButtons(tx) : (r.checkpoint&&r.cpId ? `<button class="delbtn" data-editcheckpoint="bank::${r.cpId}" title="Edit">✎</button>` : '');
+    return `<tr><td>${r.date}</td><td>${r.checkpoint?'<strong>'+r.label+'</strong>':r.label}</td><td class="amt" style="color:${r.delta>0?'var(--income)':r.delta<0?'var(--expense)':'var(--muted)'}">${r.delta===0?'—':(r.delta>0?'+':'')+fmt(r.delta)}</td><td class="amt">${fmt(r.balance)}</td><td>${actions}</td></tr>`;
+  };
   return `<div class="statgrid"><div class="stat"><div class="label">Current bank balance</div><div class="value ${cur>=0?'pos':'neg'}">${fmt(cur)}</div></div></div>
   <div class="row" style="margin-bottom:16px; gap:8px;">
     <button class="btn btn-ghost" type="button" data-expandall="1" data-expandscope="reportBody" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Expand all years</button>
@@ -801,6 +809,7 @@ function reportLottery(){
 function findCheckpoint(ref){
   if(!ref) return {date:todayStr(), balance:0};
   if(ref.account==='bank') return (state.settings.bankSnapshots||[]).find(c=>c.id===ref.id) || {date:todayStr(), balance:0};
+  if(ref.account==='banktx'){ const tx = state.transactions.find(t=>t.id===ref.id); return tx ? {date:tx.date, balance:tx.checkpointBalance} : {date:todayStr(), balance:0}; }
   const loan = state.loans.find(l=>l.id===ref.account);
   return loan ? (loan.snapshots||[]).find(c=>c.id===ref.id) || {date:todayStr(), balance:0} : {date:todayStr(), balance:0};
 }
@@ -808,15 +817,20 @@ function renderCheckpointList(){
   const rows = [];
   (state.settings.bankSnapshots||[]).forEach(c=> rows.push({date:c.date, account:'Bank account', detail:fmt(c.balance)+' (checkpoint)', editAttr:`data-editcheckpoint="bank::${c.id}"`, delAttr:`data-delcheckpoint="bank::${c.id}"`}));
   state.loans.forEach(l=> (l.snapshots||[]).forEach(c=> rows.push({date:c.date, account:l.name+' (loan)', detail:fmt(c.balance)+' (checkpoint)', editAttr:`data-editcheckpoint="${l.id}::${c.id}"`, delAttr:`data-delcheckpoint="${l.id}::${c.id}"`})));
-  state.transactions.filter(t=>t.category==='Other Income'||t.category==='Other Expense').forEach(t=>{
+  state.transactions.filter(t=>t.isBalanceCheckpoint).forEach(t=>{
+    rows.push({date:t.date, account:'Bank account', detail:'Target balance '+fmt(t.checkpointBalance)+' (adjusted '+(t.type==='income'?'+':'-')+fmt(t.amount)+')', editAttr:`data-editcheckpoint="banktx::${t.id}"`, delAttr:`data-del="${t.id}"`});
+  });
+  state.transactions.filter(t=>!t.isBalanceCheckpoint && (t.category==='Other Income'||t.category==='Other Expense')).forEach(t=>{
     const sign = t.category==='Other Income' ? '+' : '-';
-    rows.push({date:t.date, account:'Bank account', detail:sign+fmt(t.amount)+' ('+t.category+' adjustment)', editAttr:`data-edittx="${t.id}"`, delAttr:`data-del="${t.id}"`});
+    rows.push({date:t.date, account:'Bank account', detail:sign+fmt(t.amount)+' ('+t.category+', manual)', editAttr:`data-edittx="${t.id}"`, delAttr:`data-del="${t.id}"`});
   });
   if(!rows.length) return '<div class="empty">No checkpoints or balance adjustments yet.</div>';
   rows.sort((a,b)=> a.date.localeCompare(b.date));
   return `<table><thead><tr><th>Date</th><th>Account</th><th class="amt">Detail</th><th></th></tr></thead><tbody>
   ${rows.map(r=>`<tr><td>${r.date}</td><td>${r.account}</td><td class="amt">${r.detail}</td><td style="white-space:nowrap;"><button class="delbtn" ${r.editAttr} title="Edit">✎</button><button class="delbtn" ${r.delAttr} title="Delete">✕</button></td></tr>`).join('')}
-  </tbody></table>`;
+  </tbody></table>
+  <div class="row" style="margin-top:12px;"><button class="btn btn-ghost" type="button" id="recomputeCheckpointsBtn" style="flex:0 0 auto; font-size:13px;">Recompute all balance checkpoints</button></div>
+  <p class="subnote" style="margin-top:8px;">If you edit an older balance, later adjustments were calculated against the old (wrong) number. Click "Recompute all" afterward to recalculate every adjustment fresh, in date order.</p>`;
 }
 
 /* ============ PAGE: LOANS & SETUP ============ */
@@ -851,7 +865,7 @@ function pageLoans(){
     <form id="checkpointForm">
       <div class="row">
         <div class="field"><label>Account</label><select name="account" ${editingCheckpoint?'disabled':''}>
-          <option value="bank" ${editingCheckpoint&&editingCheckpoint.account==='bank'?'selected':''}>Bank account</option>
+          <option value="bank" ${editingCheckpoint&&(editingCheckpoint.account==='bank'||editingCheckpoint.account==='banktx')?'selected':''}>Bank account</option>
           ${state.loans.map(l=>`<option value="${l.id}" ${editingCheckpoint&&editingCheckpoint.account===l.id?'selected':''}>${l.name} (loan)</option>`).join('')}
         </select></div>
         <div class="field"><label>Actual balance as of that date</label><input type="number" step="0.01" name="balance" placeholder="0.00" required value="${editingCheckpoint? findCheckpoint(editingCheckpoint).balance : ''}"></div>
@@ -1057,10 +1071,32 @@ function attachHandlers(){
     const date = fd.get('date');
     if(isNaN(balance)){ showToast('Enter a valid balance'); return; }
     if(editingCheckpoint){
-      const cp = findCheckpoint(editingCheckpoint);
-      cp.date = date; cp.balance = balance;
-      if(editingCheckpoint.account==='bank'){ saveSettings().then(()=>{ showToast('Checkpoint updated'); editingCheckpoint=null; render(); }); }
-      else{ saveLoans().then(()=>{ showToast('Checkpoint updated'); editingCheckpoint=null; render(); }); }
+      if(editingCheckpoint.account==='banktx'){
+        const idx = state.transactions.findIndex(t=>t.id===editingCheckpoint.id);
+        if(idx>-1) state.transactions.splice(idx,1);
+        const baseline = calcBankBalanceAsOf(date);
+        const diff = balance - baseline;
+        if(Math.abs(diff) < 0.005){
+          saveTransactions().then(()=>{ showToast('Updated — balances now match without needing an adjustment'); editingCheckpoint=null; render(); });
+        } else {
+          const tx = {
+            id: editingCheckpoint.id, date,
+            type: diff>0 ? 'income' : 'expense',
+            category: diff>0 ? 'Other Income' : 'Other Expense',
+            amount: Math.abs(diff),
+            notes: 'Auto-added to reconcile to entered balance of '+fmt(balance),
+            isBalanceCheckpoint: true,
+            checkpointBalance: balance
+          };
+          state.transactions.push(tx);
+          saveTransactions().then(()=>{ showToast('Balance updated'); editingCheckpoint=null; render(); });
+        }
+      } else {
+        const cp = findCheckpoint(editingCheckpoint);
+        cp.date = date; cp.balance = balance;
+        if(editingCheckpoint.account==='bank'){ saveSettings().then(()=>{ showToast('Checkpoint updated'); editingCheckpoint=null; render(); }); }
+        else{ saveLoans().then(()=>{ showToast('Checkpoint updated'); editingCheckpoint=null; render(); }); }
+      }
     } else {
       const account = fd.get('account');
       if(account==='bank'){
@@ -1072,7 +1108,9 @@ function attachHandlers(){
           type: diff>0 ? 'income' : 'expense',
           category: diff>0 ? 'Other Income' : 'Other Expense',
           amount: Math.abs(diff),
-          notes: 'Auto-added to reconcile to entered balance of '+fmt(balance)
+          notes: 'Auto-added to reconcile to entered balance of '+fmt(balance),
+          isBalanceCheckpoint: true,
+          checkpointBalance: balance
         };
         state.transactions.push(tx);
         saveTransactions().then(()=>{ showToast((diff>0?'Added ':'Added ')+fmt(Math.abs(diff))+' as '+tx.category); render(); });
@@ -1194,7 +1232,9 @@ function attachHandlers(){
             type: diff>0 ? 'income' : 'expense',
             category: diff>0 ? 'Other Income' : 'Other Expense',
             amount: Math.abs(diff),
-            notes: 'Auto-added to reconcile to bulk-imported balance of '+fmt(cp.balance)
+            notes: 'Auto-added to reconcile to bulk-imported balance of '+fmt(cp.balance),
+            isBalanceCheckpoint: true,
+            checkpointBalance: cp.balance
           };
           state.transactions.push(adjTx);
           added.push(adjTx);
@@ -1214,6 +1254,34 @@ function attachHandlers(){
       if(resultBox) resultBox.innerHTML = html;
     };
     reader.readAsText(file);
+  };
+  const recomputeCheckpointsBtn = document.getElementById('recomputeCheckpointsBtn');
+  if(recomputeCheckpointsBtn) recomputeCheckpointsBtn.onclick = ()=>{
+    showConfirm('Recompute every balance-checkpoint adjustment from scratch, in date order? This corrects any that went stale after an edit. Manually-added Other Income/Expense entries (not tied to a balance checkpoint) are left untouched.', ()=>{
+      const targets = state.transactions.filter(t=>t.isBalanceCheckpoint).map(t=>({date:t.date, balance:t.checkpointBalance}));
+      state.transactions = state.transactions.filter(t=>!t.isBalanceCheckpoint);
+      targets.sort((a,b)=> a.date.localeCompare(b.date));
+      let addedCount=0, matchedCount=0;
+      targets.forEach(cp=>{
+        const calculated = calcBankBalanceAsOf(cp.date);
+        const diff = cp.balance - calculated;
+        if(Math.abs(diff) < 0.005){ matchedCount++; return; }
+        state.transactions.push({
+          id: uid(), date: cp.date,
+          type: diff>0 ? 'income' : 'expense',
+          category: diff>0 ? 'Other Income' : 'Other Expense',
+          amount: Math.abs(diff),
+          notes: 'Auto-added to reconcile to target balance of '+fmt(cp.balance),
+          isBalanceCheckpoint: true,
+          checkpointBalance: cp.balance
+        });
+        addedCount++;
+      });
+      saveTransactions().then(()=>{
+        showToast(`Recomputed ${targets.length} checkpoints: ${addedCount} adjustment${addedCount===1?'':'s'}, ${matchedCount} matched exactly`);
+        render();
+      });
+    }, 'Recompute');
   };
   const eraseAllBtn = document.getElementById('eraseAllBtn');
   if(eraseAllBtn) eraseAllBtn.onclick = ()=>{
