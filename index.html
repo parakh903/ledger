@@ -273,7 +273,13 @@ async function loadState(){
   }catch(e){ state.categories = [...DEFAULT_CATEGORIES]; }
   if(!state.settings.bankSnapshots) state.settings.bankSnapshots = [];
   state.loans.forEach(l=>{ if(!l.snapshots) l.snapshots = []; });
-  ['Other Income','Other Expense'].forEach(c=>{ if(!state.categories.includes(c)) state.categories.push(c); });
+  ['Other Income','Other Expense','Lottery'].forEach(c=>{ if(!state.categories.includes(c)) state.categories.push(c); });
+  let migrated = false;
+  state.transactions.forEach(t=>{
+    if(t.type==='lottery_expense'){ t.type='expense'; t.category='Lottery'; migrated=true; }
+    if(t.type==='lottery_income'){ t.type='income'; t.category='Lottery'; migrated=true; }
+  });
+  if(migrated) saveTransactions();
   state.loaded = true;
   render();
 }
@@ -515,14 +521,15 @@ function investmentPositions(){
   return result;
 }
 function lotteryTotals(){
-  const income = state.transactions.filter(t=>t.type==='lottery_income').reduce((s,t)=>s+t.amount,0);
-  const expense = state.transactions.filter(t=>t.type==='lottery_expense').reduce((s,t)=>s+t.amount,0);
+  const isLottery = t => t.category==='Lottery' && (t.type==='income' || t.type==='expense');
+  const income = state.transactions.filter(t=>isLottery(t) && t.type==='income').reduce((s,t)=>s+t.amount,0);
+  const expense = state.transactions.filter(t=>isLottery(t) && t.type==='expense').reduce((s,t)=>s+t.amount,0);
   const monthMap={};
   for(const t of state.transactions){
-    if(t.type!=='lottery_income' && t.type!=='lottery_expense') continue;
+    if(!isLottery(t)) continue;
     const mk = monthKey(t.date);
     if(!monthMap[mk]) monthMap[mk]={income:0,expense:0};
-    if(t.type==='lottery_income') monthMap[mk].income += t.amount; else monthMap[mk].expense += t.amount;
+    if(t.type==='income') monthMap[mk].income += t.amount; else monthMap[mk].expense += t.amount;
   }
   return {income, expense, net:income-expense, months: Object.keys(monthMap).sort().map(k=>({month:k,...monthMap[k], net: monthMap[k].income-monthMap[k].expense}))};
 }
@@ -619,7 +626,7 @@ function parseCSV(text){
 
 /* ============ PAGE: ADD ENTRY ============ */
 function pageAdd(){
-  const types = Object.keys(TYPE_META);
+  const types = Object.keys(TYPE_META).filter(t=>t!=='lottery_expense' && t!=='lottery_income');
   const invLoans = state.loans;
   const editing = editingTxId ? state.transactions.find(t=>t.id===editingTxId) : null;
   if(editing) addType = editing.type;
@@ -659,14 +666,6 @@ function pageAdd(){
         <div class="field"><label>Investment property (linked loan)</label><select name="loanId">${invLoans.filter(l=>l.type==='investment').map(l=>`<option value="${l.id}" ${v('loanId')===l.id?'selected':''}>${l.name}</option>`).join('')}</select></div>
         <div class="field"><label>Rental amount received</label><input type="number" step="0.01" min="0" name="amount" required placeholder="0.00" value="${v('amount')}"></div>
         ` : `<div class="empty">No investment-property loans yet. Add one in <strong>Loans & Setup</strong> and tag it "Investment".</div>`}
-      ` : ''}
-
-      ${addType==='lottery_expense' ? `
-        <div class="field"><label>Amount spent on tickets</label><input type="number" step="0.01" min="0" name="amount" required placeholder="0.00" value="${v('amount')}"></div>
-      ` : ''}
-
-      ${addType==='lottery_income' ? `
-        <div class="field"><label>Amount won</label><input type="number" step="0.01" min="0" name="amount" required placeholder="0.00" value="${v('amount')}"></div>
       ` : ''}
 
       <div class="field"><label>Notes (optional)</label><input type="text" name="notes" placeholder="Any extra detail" value="${escapeHtml(v('notes'))}"></div>
@@ -1128,8 +1127,8 @@ function attachHandlers(){
       '2024-01-20,expense,Groceries,320.50,,,',
       anyLoan ? `2024-01-05,loan_payment,,2200,,${anyLoan.name},650` : '2024-01-05,loan_payment,,2200,,Exact loan name from Loans & Setup,650',
       invLoan ? `2024-01-01,rental_income,,1800,,${invLoan.name},` : '2024-01-01,rental_income,,1800,,Exact investment loan name,',
-      '2024-01-10,lottery_expense,,20,,,',
-      '2024-01-12,lottery_income,,50,,,',
+      '2024-01-10,expense,Lottery,20,,,',
+      '2024-01-12,income,Lottery,50,,,',
       '2024-01-31,balance_checkpoint,,15230.55,,,'
     ];
     const blob = new Blob([lines.join('\n')], {type:'text/csv'});
@@ -1153,13 +1152,17 @@ function attachHandlers(){
       rows.forEach((r,idx)=>{
         const lineNum = idx+2;
         const date = r.date;
-        const type = (r.type||'').trim();
+        let type = (r.type||'').trim();
         if(!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)){ errors.push(`Row ${lineNum}: invalid or missing date "${r.date||''}" (need YYYY-MM-DD)`); return; }
         if(!validTypes.includes(type)){ errors.push(`Row ${lineNum}: unknown type "${r.type||''}"`); return; }
         const amount = parseFloat(r.amount);
         if(isNaN(amount) || amount<0){ errors.push(`Row ${lineNum}: invalid amount "${r.amount||''}"`); return; }
         if(type==='balance_checkpoint'){ checkpointRows.push({date, balance:amount}); return; }
+        let forcedCategory = null;
+        if(type==='lottery_expense'){ type='expense'; forcedCategory='Lottery'; }
+        if(type==='lottery_income'){ type='income'; forcedCategory='Lottery'; }
         const tx = {id:uid(), date, type, amount, notes: r.notes||''};
+        if(forcedCategory){ tx.category = forcedCategory; if(!state.categories.includes(forcedCategory)) state.categories.push(forcedCategory); added.push(tx); return; }
         if(type==='expense' || type==='income'){
           const cat = (r.category||'').trim();
           if(!cat){ errors.push(`Row ${lineNum}: missing category for ${type}`); return; }
