@@ -19,7 +19,7 @@
   --text:#EDEFF3;
   --muted:#8996AC;
   --income:#3FAE7A;
-  --expense:#C1523D;
+  --expense:#F0654A;
   --loan:#5C8AC4;
   --rental:#3E9C9C;
   --lottery:#D8AE4C;
@@ -90,7 +90,7 @@ tr:last-child td{border-bottom:none;}
 td.amt, th.amt{text-align:right; font-family:'IBM Plex Mono',monospace;}
 .tag{display:inline-block; padding:2px 9px; border-radius:20px; font-size:11px; font-weight:600;}
 .tag.income{background:rgba(63,174,122,.15); color:var(--income);}
-.tag.expense{background:rgba(193,82,61,.15); color:var(--expense);}
+.tag.expense{background:rgba(240,101,74,.15); color:var(--expense);}
 .tag.loan{background:rgba(92,138,196,.15); color:var(--loan);}
 .tag.rental{background:rgba(62,156,156,.15); color:var(--rental);}
 .tag.lottery{background:rgba(216,174,76,.15); color:var(--lottery);}
@@ -163,7 +163,7 @@ td.amt, th.amt{text-align:right; font-family:'IBM Plex Mono',monospace;}
 .cardgroup summary .mgcaret{color:var(--muted); font-size:12px; transition:transform .15s; flex-shrink:0;}
 .cardgroup[open] summary .mgcaret{transform:rotate(90deg);}
 .cardgroup-body{padding:0 20px 20px;}
-.danger-card{border-color:rgba(193,82,61,.35) !important;}
+.danger-card{border-color:rgba(240,101,74,.35) !important;}
 
 /* ---------- Mobile: bottom tab bar like an iOS app ---------- */
 #bottomnav{display:none;}
@@ -563,13 +563,25 @@ function renderNav(){
 
 /* ============ PAGE: DASHBOARD ============ */
 function pageDashboard(){
-  const recentTx = sortedTx().slice(-30).reverse();
-
+  const allTx = sortedTx().reverse();
+  if(!allTx.length){
+    return `<div class="pagehead"><h2>Transactions</h2><p>Everything you've entered, most recent first</p></div>
+    <div class="card"><div class="empty">No entries yet. Add your first one from "Add Entry".</div></div>`;
+  }
+  const yearMap = {};
+  allTx.forEach(t=>{ const yr = (t.date||'').slice(0,4) || 'Unknown'; if(!yearMap[yr]) yearMap[yr]=[]; yearMap[yr].push(t); });
+  const years = Object.keys(yearMap).sort().reverse();
   return `
   <div class="pagehead"><h2>Transactions</h2><p>Everything you've entered, most recent first</p></div>
-  <div class="card">
-    <h3>Recent entries</h3>
-    ${recentTx.length? renderTxTable(recentTx, true) : '<div class="empty">No entries yet. Add your first one from "Add Entry".</div>'}
+  <div class="row" style="margin-bottom:16px; gap:8px;">
+    <button class="btn btn-ghost" type="button" data-expandall="1" data-expandscope="txGroups" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Expand all years</button>
+    <button class="btn btn-ghost" type="button" data-expandall="0" data-expandscope="txGroups" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Collapse all years</button>
+  </div>
+  <div class="card" id="txGroups">
+  ${years.map((yr,i)=>`<details class="monthgroup" ${i===0?'open':''}>
+    <summary><span class="mgcaret">▸</span><span class="mglabel">${yr}</span><span class="mgtotal">${yearMap[yr].length} entr${yearMap[yr].length===1?'y':'ies'}</span></summary>
+    <div class="monthbody">${renderTxTable(yearMap[yr], true)}</div>
+  </details>`).join('')}
   </div>
   `;
 }
