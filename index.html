@@ -225,7 +225,7 @@ const TYPE_META = {
 };
 
 /* ============ STATE ============ */
-let state = { transactions:[], loans:[], categories:[...DEFAULT_CATEGORIES], settings:{ bankOpeningBalance:0, bankOpeningDate: todayStr(), bankSnapshots:[] }, loaded:false };
+let state = { transactions:[], loans:[], categories:[...DEFAULT_CATEGORIES], settings:{ bankOpeningBalance:0, bankOpeningDate: '1970-01-01', bankSnapshots:[] }, loaded:false };
 let currentTab = 'dashboard';
 let reportView = 'monthly';
 let addType = 'expense';
@@ -265,7 +265,7 @@ function showConfirm(message, onYes, yesLabel){
 async function loadState(){
   try{ const r = await storage.get('transactions'); state.transactions = r? JSON.parse(r.value): []; }catch(e){ state.transactions=[]; }
   try{ const r = await storage.get('loans'); state.loans = r? JSON.parse(r.value): []; }catch(e){ state.loans=[]; }
-  try{ const r = await storage.get('settings'); state.settings = r? JSON.parse(r.value): {bankOpeningBalance:0,bankOpeningDate:todayStr(),bankSnapshots:[]}; }catch(e){ state.settings={bankOpeningBalance:0,bankOpeningDate:todayStr(),bankSnapshots:[]}; }
+  try{ const r = await storage.get('settings'); state.settings = r? JSON.parse(r.value): {bankOpeningBalance:0,bankOpeningDate:'1970-01-01',bankSnapshots:[]}; }catch(e){ state.settings={bankOpeningBalance:0,bankOpeningDate:'1970-01-01',bankSnapshots:[]}; }
   try{
     const r = await storage.get('categories');
     const parsed = r? JSON.parse(r.value): [...DEFAULT_CATEGORIES];
@@ -1296,7 +1296,7 @@ function attachHandlers(){
       state.transactions = [];
       state.loans = [];
       state.categories = [...DEFAULT_CATEGORIES];
-      state.settings = { bankOpeningBalance:0, bankOpeningDate: todayStr(), bankSnapshots:[] };
+      state.settings = { bankOpeningBalance:0, bankOpeningDate: '1970-01-01', bankSnapshots:[] };
       Promise.all([saveTransactions(), saveLoans(), saveCategories(), saveSettings()]).then(()=>{
         showToast('All data erased');
         currentTab = 'dashboard';
