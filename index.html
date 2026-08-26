@@ -209,9 +209,9 @@ td.amt, th.amt{text-align:right; font-family:'IBM Plex Mono',monospace;}
 <script>
 /* ============ CONFIG ============ */
 const NAV = [
-  {id:'dashboard', label:'Dashboard'},
-  {id:'add', label:'Add Entry'},
   {id:'reports', label:'Reports'},
+  {id:'dashboard', label:'Transactions'},
+  {id:'add', label:'Add Entry'},
   {id:'loans', label:'Loans & Setup'},
 ];
 const DEFAULT_CATEGORIES = ['Groceries','Utilities','Transport','Dining','Entertainment','Health','Shopping','Insurance','Subscriptions','Education','Salary','Bonus','Interest','Gift','Side Income','Other Income','Other Expense','Other'];
@@ -226,7 +226,7 @@ const TYPE_META = {
 
 /* ============ STATE ============ */
 let state = { transactions:[], loans:[], categories:[...DEFAULT_CATEGORIES], settings:{ bankOpeningBalance:0, bankOpeningDate: '1970-01-01', bankSnapshots:[] }, loaded:false };
-let currentTab = 'dashboard';
+let currentTab = 'reports';
 let reportView = 'monthly';
 let addType = 'expense';
 let editingTxId = null;
@@ -563,24 +563,10 @@ function renderNav(){
 
 /* ============ PAGE: DASHBOARD ============ */
 function pageDashboard(){
-  const tl = bankTimeline();
-  const bankBal = tl[tl.length-1].balance;
-  const now = new Date();
-  const curMonth = now.toISOString().slice(0,7);
-  const mt = monthlyTotals().find(m=>m.month===curMonth) || {income:0,expense:0,net:0};
-  const totalLoanBal = state.loans.reduce((s,l)=>s+loanBalance(l),0);
-  const recentTx = sortedTx().slice(-8).reverse();
+  const recentTx = sortedTx().slice(-30).reverse();
 
   return `
-  <div class="pagehead"><h2>Dashboard</h2><p>${monthLabel(curMonth)} snapshot</p></div>
-  <div class="statgrid">
-    <div class="stat"><div class="label">Bank balance</div><div class="value ${bankBal>=0?'pos':'neg'}">${fmt(bankBal)}</div></div>
-    <div class="stat"><div class="label">This month income</div><div class="value pos">+${fmt(mt.income)}</div></div>
-    <div class="stat"><div class="label">This month expense</div><div class="value neg">-${fmt(mt.expense)}</div></div>
-    <div class="stat"><div class="label">This month net</div><div class="value ${mt.net>=0?'pos':'neg'}">${mt.net>=0?'+':''}${fmt(mt.net)}</div></div>
-    <div class="stat"><div class="label">Total loan balance</div><div class="value">${fmt(totalLoanBal)}</div></div>
-    <div class="stat"><div class="label">Loans tracked</div><div class="value">${state.loans.length}</div></div>
-  </div>
+  <div class="pagehead"><h2>Transactions</h2><p>Everything you've entered, most recent first</p></div>
   <div class="card">
     <h3>Recent entries</h3>
     ${recentTx.length? renderTxTable(recentTx, true) : '<div class="empty">No entries yet. Add your first one from "Add Entry".</div>'}
@@ -690,6 +676,29 @@ function pageAdd(){
 }
 
 /* ============ PAGE: REPORTS ============ */
+function reportsSnapshot(){
+  const tl = bankTimeline();
+  const bankBal = tl.length ? tl[tl.length-1].balance : 0;
+  const totalLoanBal = state.loans.reduce((s,l)=>s+loanBalance(l),0);
+  const mtRows = monthlyTotals().slice().reverse();
+  const lastTwo = mtRows.slice(0,2);
+  return `
+  <div class="statgrid" style="margin-bottom:18px;">
+    <div class="stat"><div class="label">Bank balance</div><div class="value ${bankBal>=0?'pos':'neg'}">${fmt(bankBal)}</div></div>
+    <div class="stat"><div class="label">Total loan balance</div><div class="value">${fmt(totalLoanBal)}</div></div>
+    <div class="stat"><div class="label">Loans tracked</div><div class="value">${state.loans.length}</div></div>
+  </div>
+  ${lastTwo.length? `<div class="card" style="margin-bottom:24px;">
+    <h3>Latest two months</h3>
+    ${lastTwo.map(r=>`
+      <div class="monthrow">
+        <div class="monthrow-top"><span class="monthrow-label">${monthLabel(r.month)}</span><span class="monthrow-net" style="color:${r.net>=0?'var(--income)':'var(--expense)'}">${r.net>=0?'+':''}${fmt(r.net)}</span></div>
+        <div class="monthrow-sub"><span style="color:var(--income)">+${fmt(r.income)} income</span><span style="color:var(--expense)">-${fmt(r.expense)} expense</span></div>
+      </div>
+    `).join('')}
+  </div>` : ''}
+  `;
+}
 function pageReports(){
   const views = [
     {id:'monthly', label:'Monthly income vs expense'},
@@ -701,6 +710,7 @@ function pageReports(){
   ];
   return `
   <div class="pagehead"><h2>Reports</h2><p>Everything derived from your entries</p></div>
+  ${reportsSnapshot()}
   <div class="chips">${views.map(v=>`<div class="chip ${reportView===v.id?'active':''}" data-report="${v.id}">${v.label}</div>`).join('')}</div>
   <div id="reportBody">${renderReportBody()}</div>
   `;
