@@ -243,6 +243,7 @@ const storage = (typeof window.storage === 'object' && window.storage && typeof 
       async delete(key){ try{ localStorage.removeItem('ledger:'+key); return {key, deleted:true}; }catch(e){ return null; } },
     };
 let categoryViewMode = 'month'; // 'month' or 'category'
+let moreReportView = 'networth';
 
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
@@ -349,6 +350,18 @@ function loanTimeline(loan){
 function loanBalance(loan){
   const tl = loanTimeline(loan);
   return tl.length? tl[tl.length-1].balance : (Number(loan.openingBalance)||0);
+}
+function loanBalanceAsOf(loan, date){
+  const tl = loanTimeline(loan);
+  let bal = tl.length ? tl[0].balance : (Number(loan.openingBalance)||0);
+  for(const row of tl){ if(row.date<=date) bal = row.balance; else break; }
+  return bal;
+}
+function totalLoanBalanceAsOf(date){
+  return state.loans.reduce((s,l)=>s+loanBalanceAsOf(l,date),0);
+}
+function netWorthAsOf(date){
+  return calcBankBalanceAsOf(date) - totalLoanBalanceAsOf(date);
 }
 function describeTx(t){
   const meta = TYPE_META[t.type];
@@ -719,6 +732,7 @@ function pageReports(){
     {id:'property', label:'Investment property'},
     {id:'categories', label:'Category breakdown'},
     {id:'lottery', label:'Lottery'},
+    {id:'more', label:'Other reports'},
   ];
   return `
   <div class="pagehead"><h2>Reports</h2><p>Everything derived from your entries</p></div>
@@ -734,6 +748,7 @@ function renderReportBody(){
   if(reportView==='property') return reportProperty();
   if(reportView==='categories') return reportCategories();
   if(reportView==='lottery') return reportLottery();
+  if(reportView==='more') return reportMore();
   return '';
 }
 function reportMonthly(){
@@ -881,6 +896,175 @@ function reportLottery(){
     </tbody></table></div>
   </details>`).join('') : '<div class="empty">No lottery entries yet.</div>'}
   </div>`;
+}
+
+/* ============ OTHER REPORTS ============ */
+function reportMore(){
+  const subs = [
+    {id:'networth', label:'Net worth'},
+    {id:'yearly', label:'Yearly summary'},
+    {id:'sources', label:'Income sources'},
+    {id:'reconcile', label:'Reconciliation health'},
+    {id:'biggest', label:'Biggest transactions'},
+    {id:'averages', label:'Averages & extremes'},
+  ];
+  return `
+  <div class="chips" style="margin-bottom:16px;">${subs.map(s=>`<div class="chip ${moreReportView===s.id?'active':''}" data-morereport="${s.id}">${s.label}</div>`).join('')}</div>
+  <div id="moreReportBody">${renderMoreReportBody()}</div>
+  `;
+}
+function renderMoreReportBody(){
+  if(moreReportView==='networth') return reportNetWorth();
+  if(moreReportView==='yearly') return reportYearly();
+  if(moreReportView==='sources') return reportIncomeSources();
+  if(moreReportView==='reconcile') return reportReconciliation();
+  if(moreReportView==='biggest') return reportBiggest();
+  if(moreReportView==='averages') return reportAverages();
+  return '';
+}
+
+function reportNetWorth(){
+  const rows = monthlyTotals().slice().reverse();
+  if(!rows.length) return '<div class="card"><div class="empty">No data yet.</div></div>';
+  const withNW = rows.map(r=>({month:r.month, nw: netWorthAsOf(r.month+'-31')}));
+  const yearMap = {};
+  withNW.forEach((r,i)=>{ const yr = r.month.slice(0,4); if(!yearMap[yr]) yearMap[yr]=[]; yearMap[yr].push({...r, _idx:i}); });
+  const years = Object.keys(yearMap).sort().reverse();
+  const rowHtml = r=>{
+    const prev = withNW[r._idx+1];
+    let trendHtml = '';
+    if(prev){
+      const delta = r.nw - prev.nw;
+      const arrow = delta>0?'▲':delta<0?'▼':'—';
+      const color = delta>0?'var(--income)':delta<0?'var(--expense)':'var(--muted)';
+      trendHtml = `<div class="monthrow-trend" style="color:${color}">${arrow} ${fmt(Math.abs(delta))} vs previous month</div>`;
+    }
+    return `<div class="monthrow">
+      <div class="monthrow-top"><span class="monthrow-label">${monthLabel(r.month)}</span><span class="monthrow-net" style="color:${r.nw>=0?'var(--income)':'var(--expense)'}">${fmt(r.nw)}</span></div>
+      ${trendHtml}
+    </div>`;
+  };
+  const currentNW = withNW.length ? withNW[0].nw : 0;
+  return `
+  <div class="statgrid" style="margin-bottom:18px;"><div class="stat"><div class="label">Net worth today</div><div class="value ${currentNW>=0?'pos':'neg'}">${fmt(currentNW)}</div></div></div>
+  <p class="subnote" style="margin-bottom:16px;">Bank balance minus total loan balance, at the end of each month. ${state.loans.length? '' : 'You have no loans tracked yet, so this currently just mirrors your bank balance — add a loan in Loans & Setup to see it factored in.'}</p>
+  <div class="row" style="margin-bottom:16px; gap:8px;">
+    <button class="btn btn-ghost" type="button" data-expandall="1" data-expandscope="moreReportBody" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Expand all years</button>
+    <button class="btn btn-ghost" type="button" data-expandall="0" data-expandscope="moreReportBody" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Collapse all years</button>
+  </div>
+  <div class="card"><h3>Net worth by month</h3>
+  ${years.map((yr,i)=>`<details class="monthgroup" ${i===0?'open':''}>
+    <summary><span class="mgcaret">▸</span><span class="mglabel">${yr}</span><span class="mgtotal">${yearMap[yr].length} month${yearMap[yr].length===1?'':'s'}</span></summary>
+    <div class="monthbody">${yearMap[yr].map(rowHtml).join('')}</div>
+  </details>`).join('')}
+  </div>`;
+}
+
+function reportYearly(){
+  const rows = monthlyTotals();
+  if(!rows.length) return '<div class="card"><div class="empty">No data yet.</div></div>';
+  const yearMap = {};
+  rows.forEach(r=>{ const yr = r.month.slice(0,4); if(!yearMap[yr]) yearMap[yr]={income:0,expense:0}; yearMap[yr].income+=r.income; yearMap[yr].expense+=r.expense; });
+  const years = Object.keys(yearMap).sort().reverse();
+  return `<div class="card"><h3>Yearly summary</h3><table><thead><tr><th>Year</th><th class="amt">Income</th><th class="amt">Expense</th><th class="amt">Net</th><th class="amt">Year-end balance</th></tr></thead><tbody>
+  ${years.map(yr=>{
+    const y = yearMap[yr];
+    const net = y.income - y.expense;
+    const eoy = calcBankBalanceAsOf(yr+'-12-31');
+    return `<tr><td>${yr}</td><td class="amt" style="color:var(--income)">+${fmt(y.income)}</td><td class="amt" style="color:var(--expense)">-${fmt(y.expense)}</td><td class="amt" style="color:${net>=0?'var(--income)':'var(--expense)'}">${net>=0?'+':''}${fmt(net)}</td><td class="amt">${fmt(eoy)}</td></tr>`;
+  }).join('')}
+  </tbody></table></div>`;
+}
+
+function reportIncomeSources(){
+  const totals = {};
+  let grandTotal = 0;
+  state.transactions.forEach(t=>{
+    if(t.type!=='income' || !t.category) return;
+    totals[t.category] = (totals[t.category]||0) + t.amount;
+    grandTotal += t.amount;
+  });
+  const entries = Object.entries(totals).sort((a,b)=>b[1]-a[1]);
+  if(!entries.length) return '<div class="card"><div class="empty">No income entries yet.</div></div>';
+  const max = Math.max(...entries.map(e=>e[1]),1);
+  return `<div class="card"><h3>Income by source (all time)</h3>
+  ${entries.map(([cat,val])=>{
+    const pct = grandTotal>0 ? (val/grandTotal*100) : 0;
+    return `<div class="barrow"><div class="barname">${cat}</div><div class="bartrack"><div class="barfill" style="width:${val/max*100}%; background:var(--income)"></div></div><div class="barval">${fmt(val)}</div></div><div class="subnote" style="margin:-4px 0 10px;">${pct.toFixed(1)}% of total income</div>`;
+  }).join('')}
+  </div>`;
+}
+
+function reportReconciliation(){
+  let realIncome=0, realExpense=0, adjIncome=0, adjExpense=0;
+  const yearMap = {};
+  state.transactions.forEach(t=>{
+    if(t.type!=='income' && t.type!=='expense') return;
+    const yr = (t.date||'').slice(0,4) || 'Unknown';
+    if(!yearMap[yr]) yearMap[yr] = {real:0, adj:0};
+    if(t.isBalanceCheckpoint){
+      if(t.type==='income'){ adjIncome+=t.amount; yearMap[yr].adj+=t.amount; }
+      else{ adjExpense+=t.amount; yearMap[yr].adj+=t.amount; }
+    } else {
+      if(t.type==='income'){ realIncome+=t.amount; yearMap[yr].real+=t.amount; }
+      else{ realExpense+=t.amount; yearMap[yr].real+=t.amount; }
+    }
+  });
+  const totalReal = realIncome+realExpense;
+  const totalAdj = adjIncome+adjExpense;
+  const totalAll = totalReal+totalAdj;
+  const pctReal = totalAll>0 ? (totalReal/totalAll*100) : 100;
+  const years = Object.keys(yearMap).sort().reverse();
+  return `
+  <p class="subnote" style="margin-bottom:16px;">How much of your recorded cash flow comes from real, categorized entries vs auto-generated balance adjustments. A high adjustment share in a year usually means that year relied more on end-of-month balances than granular entries — not wrong, just less detailed.</p>
+  <div class="statgrid" style="margin-bottom:18px;">
+    <div class="stat"><div class="label">Real entries</div><div class="value pos">${fmt(totalReal)}</div></div>
+    <div class="stat"><div class="label">Auto-adjustments</div><div class="value">${fmt(totalAdj)}</div></div>
+    <div class="stat"><div class="label">% explained by real entries</div><div class="value">${pctReal.toFixed(1)}%</div></div>
+  </div>
+  <div class="card"><h3>By year</h3><table><thead><tr><th>Year</th><th class="amt">Real entries</th><th class="amt">Adjustments</th><th class="amt">% real</th></tr></thead><tbody>
+  ${years.map(yr=>{
+    const y = yearMap[yr];
+    const total = y.real+y.adj;
+    const pct = total>0 ? (y.real/total*100) : 100;
+    return `<tr><td>${yr}</td><td class="amt">${fmt(y.real)}</td><td class="amt">${fmt(y.adj)}</td><td class="amt" style="color:${pct>=80?'var(--income)':pct>=50?'var(--muted)':'var(--expense)'}">${pct.toFixed(0)}%</td></tr>`;
+  }).join('')}
+  </tbody></table></div>`;
+}
+
+function reportBiggest(){
+  const income = state.transactions.filter(t=>t.type==='income').sort((a,b)=>b.amount-a.amount).slice(0,15);
+  const expense = state.transactions.filter(t=>t.type==='expense').sort((a,b)=>b.amount-a.amount).slice(0,15);
+  const rowHtml = t=>`<tr><td>${t.date}</td><td>${escapeHtml(t.category||'')}</td><td class="amt">${fmt(t.amount)}</td></tr>`;
+  return `
+  <div class="card"><h3>Biggest income entries</h3>
+  ${income.length? `<table><thead><tr><th>Date</th><th>Category</th><th class="amt">Amount</th></tr></thead><tbody>${income.map(rowHtml).join('')}</tbody></table>` : '<div class="empty">No income entries yet.</div>'}
+  </div>
+  <div class="card"><h3>Biggest expense entries</h3>
+  ${expense.length? `<table><thead><tr><th>Date</th><th>Category</th><th class="amt">Amount</th></tr></thead><tbody>${expense.map(rowHtml).join('')}</tbody></table>` : '<div class="empty">No expense entries yet.</div>'}
+  </div>`;
+}
+
+function reportAverages(){
+  const rows = monthlyTotals();
+  if(!rows.length) return '<div class="card"><div class="empty">No data yet.</div></div>';
+  const withNet = rows.map(r=>({...r, net:r.income-r.expense}));
+  const avgIncome = withNet.reduce((s,r)=>s+r.income,0)/withNet.length;
+  const avgExpense = withNet.reduce((s,r)=>s+r.expense,0)/withNet.length;
+  const avgNet = withNet.reduce((s,r)=>s+r.net,0)/withNet.length;
+  const best = withNet.slice().sort((a,b)=>b.net-a.net)[0];
+  const worst = withNet.slice().sort((a,b)=>a.net-b.net)[0];
+  return `
+  <div class="statgrid" style="margin-bottom:18px;">
+    <div class="stat"><div class="label">Avg monthly income</div><div class="value pos">+${fmt(avgIncome)}</div></div>
+    <div class="stat"><div class="label">Avg monthly expense</div><div class="value neg">-${fmt(avgExpense)}</div></div>
+    <div class="stat"><div class="label">Avg monthly net</div><div class="value ${avgNet>=0?'pos':'neg'}">${avgNet>=0?'+':''}${fmt(avgNet)}</div></div>
+  </div>
+  <div class="statgrid">
+    <div class="stat"><div class="label">Best month</div><div class="value pos">${monthLabel(best.month)}: +${fmt(best.net)}</div></div>
+    <div class="stat"><div class="label">Worst month</div><div class="value neg">${monthLabel(worst.month)}: ${fmt(worst.net)}</div></div>
+  </div>
+  <p class="subnote" style="margin-top:16px;">Across ${withNet.length} month${withNet.length===1?'':'s'} of data.</p>`;
 }
 
 function findCheckpoint(ref){
@@ -1051,6 +1235,9 @@ function attachHandlers(){
   });
   document.querySelectorAll('[data-catview]').forEach(el=>{
     el.onclick = ()=>{ categoryViewMode = el.dataset.catview; document.getElementById('reportBody').innerHTML = renderReportBody(); attachHandlers(); };
+  });
+  document.querySelectorAll('[data-morereport]').forEach(el=>{
+    el.onclick = ()=>{ moreReportView = el.dataset.morereport; document.querySelectorAll('[data-morereport]').forEach(c=>c.classList.toggle('active', c.dataset.morereport===moreReportView)); document.getElementById('moreReportBody').innerHTML = renderMoreReportBody(); attachHandlers(); };
   });
   document.querySelectorAll('[data-expandall]').forEach(el=>{
     el.onclick = ()=>{
