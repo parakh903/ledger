@@ -1206,10 +1206,14 @@ function pageLoans(){
     <summary><span class="mgcaret">▸</span><span class="mglabel">Backup</span></summary>
     <div class="cardgroup-body">
     <p class="subnote" style="margin-bottom:12px;">Export everything as a JSON file, or restore from a previous export. <strong>Import fully replaces</strong> all current data — use Bulk Add above instead if you just want to add entries.</p>
-    <div class="row">
-      <button class="btn btn-ghost" id="exportBtn" type="button">Export data</button>
+    <div class="row" style="margin-bottom:10px;">
+      <button class="btn btn-ghost" id="exportBtn" type="button">Export data (JSON)</button>
       <label class="btn btn-ghost" style="text-align:center; cursor:pointer;">Import data (replaces everything)<input type="file" id="importFile" accept="application/json" style="display:none;"></label>
     </div>
+    <div class="row">
+      <button class="btn btn-ghost" id="exportCsvBtn" type="button">Export transactions (CSV)</button>
+    </div>
+    <p class="subnote" style="margin-top:10px;">The CSV is a readable spreadsheet of every transaction, in the same format the Bulk Add tool accepts — handy for opening in Excel/Numbers, or re-importing elsewhere. It doesn't include loans, checkpoints, or categories — for a complete restore, use the JSON export instead.</p>
     </div>
   </details>
 
@@ -1568,6 +1572,31 @@ function attachHandlers(){
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = 'ledger-backup-'+todayStr()+'.json';
+    a.click(); URL.revokeObjectURL(url);
+  };
+  const exportCsvBtn = document.getElementById('exportCsvBtn');
+  if(exportCsvBtn) exportCsvBtn.onclick = ()=>{
+    const csvField = v=>{
+      const s = String(v==null? '' : v);
+      return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+    };
+    const lines = ['date,type,category,amount,notes,loan_name,principal'];
+    sortedTx().forEach(t=>{
+      const loan = t.loanId ? state.loans.find(l=>l.id===t.loanId) : null;
+      lines.push([
+        csvField(t.date),
+        csvField(t.type),
+        csvField(t.category||''),
+        csvField(t.amount),
+        csvField(t.notes||''),
+        csvField(loan? loan.name : ''),
+        csvField(t.type==='loan_payment' && t.principal!=null ? t.principal : '')
+      ].join(','));
+    });
+    const blob = new Blob([lines.join('\n')], {type:'text/csv'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'ledger-transactions-'+todayStr()+'.csv';
     a.click(); URL.revokeObjectURL(url);
   };
   const importFile = document.getElementById('importFile');
