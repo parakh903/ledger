@@ -421,13 +421,18 @@ function reportCategories(){
   return `
   <div class="chips" style="margin-bottom:10px;">
     <div class="chip ${categoryViewMode==='month'?'active':''}" data-catview="month">Month → categories</div>
+    <div class="chip ${categoryViewMode==='year'?'active':''}" data-catview="year">Year → categories</div>
+    <div class="chip ${categoryViewMode==='range'?'active':''}" data-catview="range">Range → categories</div>
     <div class="chip ${categoryViewMode==='category'?'active':''}" data-catview="category">Category → months</div>
   </div>
-  <div class="row" style="margin-bottom:16px; gap:8px;">
+  ${categoryViewMode!=='range' ? `<div class="row" style="margin-bottom:16px; gap:8px;">
     <button class="btn btn-ghost" type="button" data-expandall="1" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Expand all</button>
     <button class="btn btn-ghost" type="button" data-expandall="0" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Collapse all</button>
-  </div>
-  ${categoryViewMode==='month' ? reportCategoriesByMonth() : reportCategoriesByCategory()}
+  </div>` : ''}
+  ${categoryViewMode==='month' ? reportCategoriesByMonth()
+    : categoryViewMode==='year' ? reportCategoriesByYear()
+    : categoryViewMode==='range' ? reportCategoriesByRange()
+    : reportCategoriesByCategory()}
   `;
 }
 function netBadge(detail, net){
@@ -479,6 +484,79 @@ function reportCategoriesByMonth(){
       </details>`;
     }).join('')}
   </div>`;
+}
+function reportCategoriesByYear(){
+  const {income, expense} = monthlyCategoryMap();
+  const incomeByYear = {}, expenseByYear = {};
+  Object.entries(income).forEach(([mk,cats])=>{
+    const yr = mk.slice(0,4);
+    if(!incomeByYear[yr]) incomeByYear[yr] = {};
+    Object.entries(cats).forEach(([cat,val])=>{ incomeByYear[yr][cat] = (incomeByYear[yr][cat]||0)+val; });
+  });
+  Object.entries(expense).forEach(([mk,cats])=>{
+    const yr = mk.slice(0,4);
+    if(!expenseByYear[yr]) expenseByYear[yr] = {};
+    Object.entries(cats).forEach(([cat,val])=>{ expenseByYear[yr][cat] = (expenseByYear[yr][cat]||0)+val; });
+  });
+  const allYears = Array.from(new Set([...Object.keys(incomeByYear), ...Object.keys(expenseByYear)])).sort().reverse();
+  if(!allYears.length) return '<div class="card"><div class="empty">No income or expenses yet.</div></div>';
+  return `
+  <div class="card">
+    <h3>Yearly categories</h3>
+    <p class="subnote" style="margin-bottom:10px;">Tap a year to see income and expense categories together, plus that year's net.</p>
+    ${allYears.map((yr,i)=>{
+      const incomeCats = incomeByYear[yr] ? Object.entries(incomeByYear[yr]).sort((a,b)=>b[1]-a[1]) : [];
+      const expenseCats = expenseByYear[yr] ? Object.entries(expenseByYear[yr]).sort((a,b)=>b[1]-a[1]) : [];
+      const totalIncome = incomeCats.reduce((s,[,v])=>s+v,0);
+      const totalExpense = expenseCats.reduce((s,[,v])=>s+v,0);
+      const net = totalIncome - totalExpense;
+      const maxInc = Math.max(...incomeCats.map(c=>c[1]),1);
+      const maxExp = Math.max(...expenseCats.map(c=>c[1]),1);
+      return `<details class="monthgroup" ${i===0?'open':''}>
+        <summary><span class="mgcaret">▸</span><span class="mglabel">${yr}</span><span class="mgtotal" style="color:${net>=0?'var(--income)':'var(--expense)'}">${net>=0?'+':''}${fmt(net)}</span></summary>
+        <div class="monthbody">
+          <div class="subnote" style="text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px;">Income</div>
+          ${incomeCats.length? incomeCats.map(([cat,val])=>{
+            const spent = (expenseByYear[yr] && expenseByYear[yr][cat]) || 0;
+            const catNet = val - spent;
+            return spent>0
+              ? `<div class="barrow"><div class="barname">${cat}</div><div class="bartrack"><div class="barfill" style="width:${val/maxInc*100}%; background:var(--income)"></div></div><div class="barval" style="color:var(--income)">+${fmt(val)}</div></div>${netBadge('Received +'+fmt(val)+' &nbsp;·&nbsp; Spent -'+fmt(spent), catNet)}`
+              : `<div class="barrow"><div class="barname">${cat}</div><div class="bartrack"><div class="barfill" style="width:${val/maxInc*100}%; background:var(--income)"></div></div><div class="barval" style="color:var(--income)">+${fmt(val)}</div></div>`;
+          }).join('') : '<div class="empty" style="padding:4px 0 14px;">No income this year.</div>'}
+          <div class="divider"></div>
+          <div class="subnote" style="text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px;">Expense</div>
+          ${expenseCats.length? expenseCats.map(([cat,val])=>{
+            const received = (incomeByYear[yr] && incomeByYear[yr][cat]) || 0;
+            const catNet = received - val;
+            return received>0
+              ? `<div class="barrow"><div class="barname">${cat}</div><div class="bartrack"><div class="barfill" style="width:${val/maxExp*100}%; background:var(--expense)"></div></div><div class="barval" style="color:var(--expense)">-${fmt(val)}</div></div>${netBadge('Spent -'+fmt(val)+' &nbsp;·&nbsp; Refunded +'+fmt(received), catNet)}`
+              : `<div class="barrow"><div class="barname">${cat}</div><div class="bartrack"><div class="barfill" style="width:${val/maxExp*100}%; background:var(--expense)"></div></div><div class="barval" style="color:var(--expense)">-${fmt(val)}</div></div>`;
+          }).join('') : '<div class="empty" style="padding:4px 0 14px;">No expenses this year.</div>'}
+          <div class="divider"></div>
+          ${netBadge('Income +'+fmt(totalIncome)+' &nbsp;·&nbsp; Expense -'+fmt(totalExpense), net)}
+        </div>
+      </details>`;
+    }).join('')}
+  </div>`;
+}
+function reportCategoriesByRange(){
+  return `
+  <div class="card">
+    <h3>Choose a period</h3>
+    <p class="subnote" style="margin-bottom:10px;">Same picker as Other Reports → Range summary — pick once, see it reflected in both places.</p>
+    <form id="rangeForm2">
+      <div class="field"><label>Period type</label><select name="rangeType" id="rangeTypeSelect2">
+        <option value="month" ${rangeType==='month'?'selected':''}>Month</option>
+        <option value="quarter" ${rangeType==='quarter'?'selected':''}>Quarter</option>
+        <option value="year" ${rangeType==='year'?'selected':''}>Year</option>
+        <option value="custom" ${rangeType==='custom'?'selected':''}>Custom date range</option>
+      </select></div>
+      <div id="rangeSubFields2">${rangeSubFieldsHtml()}</div>
+      <button class="btn" type="submit" style="margin-top:6px;">Show</button>
+    </form>
+  </div>
+  <div id="rangeResultBody2">${rangeResultHtml()}</div>
+  `;
 }
 function reportCategoriesByCategory(){
   const {income, expense} = monthlyCategoryMap();
@@ -1362,6 +1440,23 @@ function attachHandlers(){
     if(rangeType==='custom'){ rangeFrom = fd.get('rangeFrom') || rangeFrom; rangeTo = fd.get('rangeTo') || rangeTo; }
     const resultEl = document.getElementById('rangeResultBody');
     if(resultEl) resultEl.innerHTML = rangeResultHtml();
+  };
+  const rangeTypeSelect2 = document.getElementById('rangeTypeSelect2');
+  if(rangeTypeSelect2) rangeTypeSelect2.onchange = ()=>{
+    rangeType = rangeTypeSelect2.value;
+    document.getElementById('rangeSubFields2').innerHTML = rangeSubFieldsHtml();
+  };
+  const rangeForm2 = document.getElementById('rangeForm2');
+  if(rangeForm2) rangeForm2.onsubmit = (e)=>{
+    e.preventDefault();
+    const fd = new FormData(rangeForm2);
+    rangeType = fd.get('rangeType') || rangeType;
+    if(rangeType==='month') rangeMonth = fd.get('rangeMonth') || rangeMonth;
+    if(rangeType==='year') rangeYear = fd.get('rangeYear') || rangeYear;
+    if(rangeType==='quarter'){ rangeYear = fd.get('rangeYear') || rangeYear; rangeQuarter = fd.get('rangeQuarter') || rangeQuarter; }
+    if(rangeType==='custom'){ rangeFrom = fd.get('rangeFrom') || rangeFrom; rangeTo = fd.get('rangeTo') || rangeTo; }
+    const resultEl2 = document.getElementById('rangeResultBody2');
+    if(resultEl2) resultEl2.innerHTML = rangeResultHtml();
   };
   document.querySelectorAll('[data-expandall]').forEach(el=>{
     el.onclick = ()=>{
