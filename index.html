@@ -383,12 +383,21 @@ function monthlyTotals(){
 function monthlyCategoryMap(){
   const income = {}, expense = {};
   for(const t of state.transactions){
-    if(t.type!=='income' && t.type!=='expense') continue;
-    if(!t.category) continue;
+    let cat, bucket;
+    if(t.type==='income' || t.type==='expense'){
+      if(!t.category) continue;
+      cat = t.category;
+      bucket = t.type==='income' ? income : expense;
+    } else if(t.type==='rental_income'){
+      const loan = t.loanId ? state.loans.find(l=>l.id===t.loanId) : null;
+      cat = (loan? loan.name : 'Unlinked property') + ' Rental';
+      bucket = income;
+    } else {
+      continue;
+    }
     const mk = monthKey(t.date);
-    const bucket = t.type==='income' ? income : expense;
     if(!bucket[mk]) bucket[mk] = {};
-    bucket[mk][t.category] = (bucket[mk][t.category]||0) + t.amount;
+    bucket[mk][cat] = (bucket[mk][cat]||0) + t.amount;
   }
   return {income, expense};
 }
@@ -980,8 +989,11 @@ function reportIncomeSources(){
   const totals = {};
   let grandTotal = 0;
   state.transactions.forEach(t=>{
-    if(t.type!=='income' || !t.category) return;
-    totals[t.category] = (totals[t.category]||0) + t.amount;
+    let cat;
+    if(t.type==='income' && t.category) cat = t.category;
+    else if(t.type==='rental_income'){ const loan = t.loanId ? state.loans.find(l=>l.id===t.loanId) : null; cat = (loan? loan.name : 'Unlinked property') + ' Rental'; }
+    else return;
+    totals[cat] = (totals[cat]||0) + t.amount;
     grandTotal += t.amount;
   });
   const entries = Object.entries(totals).sort((a,b)=>b[1]-a[1]);
