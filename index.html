@@ -243,7 +243,13 @@ const storage = (typeof window.storage === 'object' && window.storage && typeof 
       async delete(key){ try{ localStorage.removeItem('ledger:'+key); return {key, deleted:true}; }catch(e){ return null; } },
     };
 let categoryViewMode = 'month'; // 'month' or 'category'
-let moreReportView = 'networth';
+let moreReportView = 'range';
+let rangeType = 'month'; // 'month' | 'quarter' | 'year' | 'custom'
+let rangeMonth = todayStr().slice(0,7);
+let rangeYear = todayStr().slice(0,4);
+let rangeQuarter = String(Math.floor((new Date().getMonth())/3)+1);
+let rangeFrom = todayStr().slice(0,8)+'01';
+let rangeTo = todayStr();
 
 function todayStr(){ return new Date().toISOString().slice(0,10); }
 function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
@@ -922,6 +928,7 @@ function reportLottery(){
 /* ============ OTHER REPORTS ============ */
 function reportMore(){
   const subs = [
+    {id:'range', label:'Range summary'},
     {id:'networth', label:'Net worth'},
     {id:'yearly', label:'Yearly summary'},
     {id:'sources', label:'Income sources'},
@@ -935,6 +942,7 @@ function reportMore(){
   `;
 }
 function renderMoreReportBody(){
+  if(moreReportView==='range') return reportRange();
   if(moreReportView==='networth') return reportNetWorth();
   if(moreReportView==='yearly') return reportYearly();
   if(moreReportView==='sources') return reportIncomeSources();
@@ -944,6 +952,86 @@ function renderMoreReportBody(){
   return '';
 }
 
+function rangeBounds(){
+  if(rangeType==='month') return {from: rangeMonth+'-01', to: rangeMonth+'-31', label: monthLabel(rangeMonth)};
+  if(rangeType==='year') return {from: rangeYear+'-01-01', to: rangeYear+'-12-31', label: rangeYear};
+  if(rangeType==='quarter'){
+    const q = parseInt(rangeQuarter,10);
+    const startMonth = (q-1)*3+1;
+    const endMonth = q*3;
+    return {from: rangeYear+'-'+String(startMonth).padStart(2,'0')+'-01', to: rangeYear+'-'+String(endMonth).padStart(2,'0')+'-31', label: 'Q'+q+' '+rangeYear};
+  }
+  return {from: rangeFrom, to: rangeTo, label: rangeFrom+' to '+rangeTo};
+}
+function computeRangeSummary(from, to){
+  const incomeCats = {}, expenseCats = {};
+  let totalIncome=0, totalExpense=0;
+  state.transactions.forEach(t=>{
+    if(!t.date || t.date<from || t.date>to) return;
+    if(t.type==='income' && t.category){ incomeCats[t.category]=(incomeCats[t.category]||0)+t.amount; totalIncome+=t.amount; }
+    else if(t.type==='expense' && t.category){ expenseCats[t.category]=(expenseCats[t.category]||0)+t.amount; totalExpense+=t.amount; }
+    else if(t.type==='rental_income'){ const loan=t.loanId?state.loans.find(l=>l.id===t.loanId):null; const cat=(loan?loan.name:'Unlinked property')+' Rental'; incomeCats[cat]=(incomeCats[cat]||0)+t.amount; totalIncome+=t.amount; }
+    else if(t.type==='loan_payment'){ const loan=t.loanId?state.loans.find(l=>l.id===t.loanId):null; const cat=(loan?loan.name:'Unlinked loan')+' Payment'; expenseCats[cat]=(expenseCats[cat]||0)+t.amount; totalExpense+=t.amount; }
+  });
+  return {
+    incomeCats: Object.entries(incomeCats).sort((a,b)=>b[1]-a[1]),
+    expenseCats: Object.entries(expenseCats).sort((a,b)=>b[1]-a[1]),
+    totalIncome, totalExpense, net: totalIncome-totalExpense
+  };
+}
+function rangeSubFieldsHtml(){
+  if(rangeType==='month') return `<div class="field"><label>Month</label><input type="month" name="rangeMonth" value="${rangeMonth}"></div>`;
+  if(rangeType==='year') return `<div class="field"><label>Year</label><input type="number" name="rangeYear" value="${rangeYear}" placeholder="2026"></div>`;
+  if(rangeType==='quarter') return `<div class="row">
+    <div class="field"><label>Year</label><input type="number" name="rangeYear" value="${rangeYear}" placeholder="2026"></div>
+    <div class="field"><label>Quarter</label><select name="rangeQuarter">
+      <option value="1" ${rangeQuarter==='1'?'selected':''}>Q1 (Jan–Mar)</option>
+      <option value="2" ${rangeQuarter==='2'?'selected':''}>Q2 (Apr–Jun)</option>
+      <option value="3" ${rangeQuarter==='3'?'selected':''}>Q3 (Jul–Sep)</option>
+      <option value="4" ${rangeQuarter==='4'?'selected':''}>Q4 (Oct–Dec)</option>
+    </select></div>
+  </div>`;
+  return `<div class="row">
+    <div class="field"><label>From</label><input type="date" name="rangeFrom" value="${rangeFrom}"></div>
+    <div class="field"><label>To</label><input type="date" name="rangeTo" value="${rangeTo}"></div>
+  </div>`;
+}
+function rangeResultHtml(){
+  const {from, to, label} = rangeBounds();
+  const s = computeRangeSummary(from, to);
+  const maxInc = Math.max(...s.incomeCats.map(c=>c[1]),1);
+  const maxExp = Math.max(...s.expenseCats.map(c=>c[1]),1);
+  return `
+  <div class="statgrid" style="margin-bottom:18px;">
+    <div class="stat"><div class="label">${escapeHtml(label)} income</div><div class="value pos">+${fmt(s.totalIncome)}</div></div>
+    <div class="stat"><div class="label">${escapeHtml(label)} expense</div><div class="value neg">-${fmt(s.totalExpense)}</div></div>
+    <div class="stat"><div class="label">Net</div><div class="value ${s.net>=0?'pos':'neg'}">${s.net>=0?'+':''}${fmt(s.net)}</div></div>
+  </div>
+  <div class="card"><h3>Income by category</h3>
+  ${s.incomeCats.length? s.incomeCats.map(([cat,val])=>`<div class="barrow"><div class="barname">${escapeHtml(cat)}</div><div class="bartrack"><div class="barfill" style="width:${val/maxInc*100}%; background:var(--income)"></div></div><div class="barval" style="color:var(--income)">+${fmt(val)}</div></div>`).join('') : '<div class="empty">No income in this period.</div>'}
+  </div>
+  <div class="card"><h3>Expense by category</h3>
+  ${s.expenseCats.length? s.expenseCats.map(([cat,val])=>`<div class="barrow"><div class="barname">${escapeHtml(cat)}</div><div class="bartrack"><div class="barfill" style="width:${val/maxExp*100}%; background:var(--expense)"></div></div><div class="barval" style="color:var(--expense)">-${fmt(val)}</div></div>`).join('') : '<div class="empty">No expenses in this period.</div>'}
+  </div>`;
+}
+function reportRange(){
+  return `
+  <div class="card">
+    <h3>Choose a period</h3>
+    <form id="rangeForm">
+      <div class="field"><label>Period type</label><select name="rangeType" id="rangeTypeSelect">
+        <option value="month" ${rangeType==='month'?'selected':''}>Month</option>
+        <option value="quarter" ${rangeType==='quarter'?'selected':''}>Quarter</option>
+        <option value="year" ${rangeType==='year'?'selected':''}>Year</option>
+        <option value="custom" ${rangeType==='custom'?'selected':''}>Custom date range</option>
+      </select></div>
+      <div id="rangeSubFields">${rangeSubFieldsHtml()}</div>
+      <button class="btn" type="submit" style="margin-top:6px;">Show</button>
+    </form>
+  </div>
+  <div id="rangeResultBody">${rangeResultHtml()}</div>
+  `;
+}
 function reportNetWorth(){
   const rows = monthlyTotals().slice().reverse();
   if(!rows.length) return '<div class="card"><div class="empty">No data yet.</div></div>';
@@ -1267,6 +1355,23 @@ function attachHandlers(){
   document.querySelectorAll('[data-morereport]').forEach(el=>{
     el.onclick = ()=>{ moreReportView = el.dataset.morereport; document.querySelectorAll('[data-morereport]').forEach(c=>c.classList.toggle('active', c.dataset.morereport===moreReportView)); document.getElementById('moreReportBody').innerHTML = renderMoreReportBody(); attachHandlers(); };
   });
+  const rangeTypeSelect = document.getElementById('rangeTypeSelect');
+  if(rangeTypeSelect) rangeTypeSelect.onchange = ()=>{
+    rangeType = rangeTypeSelect.value;
+    document.getElementById('rangeSubFields').innerHTML = rangeSubFieldsHtml();
+  };
+  const rangeForm = document.getElementById('rangeForm');
+  if(rangeForm) rangeForm.onsubmit = (e)=>{
+    e.preventDefault();
+    const fd = new FormData(rangeForm);
+    rangeType = fd.get('rangeType') || rangeType;
+    if(rangeType==='month') rangeMonth = fd.get('rangeMonth') || rangeMonth;
+    if(rangeType==='year') rangeYear = fd.get('rangeYear') || rangeYear;
+    if(rangeType==='quarter'){ rangeYear = fd.get('rangeYear') || rangeYear; rangeQuarter = fd.get('rangeQuarter') || rangeQuarter; }
+    if(rangeType==='custom'){ rangeFrom = fd.get('rangeFrom') || rangeFrom; rangeTo = fd.get('rangeTo') || rangeTo; }
+    const resultEl = document.getElementById('rangeResultBody');
+    if(resultEl) resultEl.innerHTML = rangeResultHtml();
+  };
   document.querySelectorAll('[data-expandall]').forEach(el=>{
     el.onclick = ()=>{
       const open = el.dataset.expandall==='1';
