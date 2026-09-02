@@ -392,6 +392,10 @@ function monthlyCategoryMap(){
       const loan = t.loanId ? state.loans.find(l=>l.id===t.loanId) : null;
       cat = (loan? loan.name : 'Unlinked property') + ' Rental';
       bucket = income;
+    } else if(t.type==='loan_payment'){
+      const loan = t.loanId ? state.loans.find(l=>l.id===t.loanId) : null;
+      cat = (loan? loan.name : 'Unlinked loan') + ' Payment';
+      bucket = expense;
     } else {
       continue;
     }
@@ -432,8 +436,9 @@ function reportCategoriesByMonth(){
   const incomeMonths = Object.keys(income).sort().reverse();
   const expenseMonths = Object.keys(expense).sort().reverse();
   return `
-  <div class="card">
-    <h3>Monthly income by category</h3>
+  <details class="cardgroup monthgroup" open>
+    <summary><span class="mgcaret">▸</span><span class="mglabel">Monthly income by category</span></summary>
+    <div class="cardgroup-body">
     <p class="subnote" style="margin-bottom:10px;">Tap a month to see the categories inside it.</p>
     ${incomeMonths.length? incomeMonths.map((mk,i)=>{
       const cats = Object.entries(income[mk]).sort((a,b)=>b[1]-a[1]);
@@ -452,9 +457,11 @@ function reportCategoriesByMonth(){
         </div>
       </details>`;
     }).join('') : '<div class="empty">No income yet.</div>'}
-  </div>
-  <div class="card">
-    <h3>Monthly expense by category</h3>
+    </div>
+  </details>
+  <details class="cardgroup monthgroup" open>
+    <summary><span class="mgcaret">▸</span><span class="mglabel">Monthly expense by category</span></summary>
+    <div class="cardgroup-body">
     <p class="subnote" style="margin-bottom:10px;">Tap a month to see the categories inside it. Expenses show as negative — if a category also had income that month (e.g. a refund), the net is highlighted.</p>
     ${expenseMonths.length? expenseMonths.map((mk,i)=>{
       const cats = Object.entries(expense[mk]).sort((a,b)=>b[1]-a[1]);
@@ -473,7 +480,8 @@ function reportCategoriesByMonth(){
         </div>
       </details>`;
     }).join('') : '<div class="empty">No expenses yet.</div>'}
-  </div>`;
+    </div>
+  </details>`;
 }
 function reportCategoriesByCategory(){
   const {income, expense} = monthlyCategoryMap();
@@ -490,8 +498,9 @@ function reportCategoriesByCategory(){
     return tb-ta;
   });
   return `
-  <div class="card">
-    <h3>Income categories, monthwise</h3>
+  <details class="cardgroup monthgroup" open>
+    <summary><span class="mgcaret">▸</span><span class="mglabel">Income categories, monthwise</span></summary>
+    <div class="cardgroup-body">
     <p class="subnote" style="margin-bottom:10px;">Tap a category to see it broken down by month.</p>
     ${incomeCats.length? incomeCats.map((cat,i)=>{
       const months = Object.entries(incomeByCat[cat]).sort((a,b)=>a[0].localeCompare(b[0])).reverse();
@@ -510,9 +519,11 @@ function reportCategoriesByCategory(){
         </div>
       </details>`;
     }).join('') : '<div class="empty">No income yet.</div>'}
-  </div>
-  <div class="card">
-    <h3>Expense categories, monthwise</h3>
+    </div>
+  </details>
+  <details class="cardgroup monthgroup" open>
+    <summary><span class="mgcaret">▸</span><span class="mglabel">Expense categories, monthwise</span></summary>
+    <div class="cardgroup-body">
     <p class="subnote" style="margin-bottom:10px;">Tap a category to see it broken down by month. Expenses show as negative — months with income in the same category (e.g. a refund) show the net highlighted.</p>
     ${expenseCats.length? expenseCats.map((cat,i)=>{
       const months = Object.entries(expenseByCat[cat]).sort((a,b)=>a[0].localeCompare(b[0])).reverse();
@@ -531,7 +542,8 @@ function reportCategoriesByCategory(){
         </div>
       </details>`;
     }).join('') : '<div class="empty">No expenses yet.</div>'}
-  </div>`;
+    </div>
+  </details>`;
 }
 function investmentPositions(){
   const invLoans = state.loans.filter(l=>l.type==='investment');
