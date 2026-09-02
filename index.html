@@ -417,22 +417,35 @@ function transposeToCategory(monthMap){
   for(const mk in monthMap){ for(const cat in monthMap[mk]){ if(!byCat[cat]) byCat[cat] = {}; byCat[cat][mk] = monthMap[mk][cat]; } }
   return byCat;
 }
+function aggregateToYearly(monthMap){
+  const yearMap = {};
+  Object.entries(monthMap).forEach(([mk,cats])=>{
+    const yr = mk.slice(0,4);
+    if(!yearMap[yr]) yearMap[yr] = {};
+    Object.entries(cats).forEach(([cat,val])=>{ yearMap[yr][cat] = (yearMap[yr][cat]||0)+val; });
+  });
+  return yearMap;
+}
 function reportCategories(){
   return `
   <div class="chips" style="margin-bottom:10px;">
     <div class="chip ${categoryViewMode==='month'?'active':''}" data-catview="month">Month → categories</div>
     <div class="chip ${categoryViewMode==='year'?'active':''}" data-catview="year">Year → categories</div>
     <div class="chip ${categoryViewMode==='range'?'active':''}" data-catview="range">Range → categories</div>
-    <div class="chip ${categoryViewMode==='category'?'active':''}" data-catview="category">Category → months</div>
+    <div class="chip ${categoryViewMode==='catmonth'?'active':''}" data-catview="catmonth">Category → months</div>
+    <div class="chip ${categoryViewMode==='catyear'?'active':''}" data-catview="catyear">Category → years</div>
+    <div class="chip ${categoryViewMode==='catrange'?'active':''}" data-catview="catrange">Category → range</div>
   </div>
-  ${categoryViewMode!=='range' ? `<div class="row" style="margin-bottom:16px; gap:8px;">
+  ${(categoryViewMode!=='range' && categoryViewMode!=='catrange') ? `<div class="row" style="margin-bottom:16px; gap:8px;">
     <button class="btn btn-ghost" type="button" data-expandall="1" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Expand all</button>
     <button class="btn btn-ghost" type="button" data-expandall="0" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Collapse all</button>
   </div>` : ''}
   ${categoryViewMode==='month' ? reportCategoriesByMonth()
     : categoryViewMode==='year' ? reportCategoriesByYear()
     : categoryViewMode==='range' ? reportCategoriesByRange()
-    : reportCategoriesByCategory()}
+    : categoryViewMode==='catyear' ? reportCategoriesByCategoryPeriod('year')
+    : categoryViewMode==='catrange' ? reportCategoriesByRange()
+    : reportCategoriesByCategoryPeriod('month')}
   `;
 }
 function netBadge(detail, net){
@@ -461,6 +474,11 @@ function reportCategoriesByMonth(){
       return `<details class="monthgroup" ${i===0?'open':''}>
         <summary><span class="mgcaret">▸</span><span class="mglabel">${monthLabel(mk)}</span><span class="mgtotal" style="color:${net>=0?'var(--income)':'var(--expense)'}">${net>=0?'+':''}${fmt(net)}</span></summary>
         <div class="monthbody">
+          <div class="statgrid" style="margin-bottom:16px;">
+            <div class="stat"><div class="label">Total income</div><div class="value pos">+${fmt(totalIncome)}</div></div>
+            <div class="stat"><div class="label">Total expense</div><div class="value neg">-${fmt(totalExpense)}</div></div>
+            <div class="stat"><div class="label">Net</div><div class="value ${net>=0?'pos':'neg'}">${net>=0?'+':''}${fmt(net)}</div></div>
+          </div>
           <div class="subnote" style="text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px;">Income</div>
           ${incomeCats.length? incomeCats.map(([cat,val])=>{
             const spent = (expense[mk] && expense[mk][cat]) || 0;
@@ -478,8 +496,6 @@ function reportCategoriesByMonth(){
               ? `<div class="barrow"><div class="barname">${cat}</div><div class="bartrack"><div class="barfill" style="width:${val/maxExp*100}%; background:var(--expense)"></div></div><div class="barval" style="color:var(--expense)">-${fmt(val)}</div></div>${netBadge('Spent -'+fmt(val)+' &nbsp;·&nbsp; Refunded +'+fmt(received), catNet)}`
               : `<div class="barrow"><div class="barname">${cat}</div><div class="bartrack"><div class="barfill" style="width:${val/maxExp*100}%; background:var(--expense)"></div></div><div class="barval" style="color:var(--expense)">-${fmt(val)}</div></div>`;
           }).join('') : '<div class="empty" style="padding:4px 0 14px;">No expenses this month.</div>'}
-          <div class="divider"></div>
-          ${netBadge('Income +'+fmt(totalIncome)+' &nbsp;·&nbsp; Expense -'+fmt(totalExpense), net)}
         </div>
       </details>`;
     }).join('')}
@@ -487,17 +503,8 @@ function reportCategoriesByMonth(){
 }
 function reportCategoriesByYear(){
   const {income, expense} = monthlyCategoryMap();
-  const incomeByYear = {}, expenseByYear = {};
-  Object.entries(income).forEach(([mk,cats])=>{
-    const yr = mk.slice(0,4);
-    if(!incomeByYear[yr]) incomeByYear[yr] = {};
-    Object.entries(cats).forEach(([cat,val])=>{ incomeByYear[yr][cat] = (incomeByYear[yr][cat]||0)+val; });
-  });
-  Object.entries(expense).forEach(([mk,cats])=>{
-    const yr = mk.slice(0,4);
-    if(!expenseByYear[yr]) expenseByYear[yr] = {};
-    Object.entries(cats).forEach(([cat,val])=>{ expenseByYear[yr][cat] = (expenseByYear[yr][cat]||0)+val; });
-  });
+  const incomeByYear = aggregateToYearly(income);
+  const expenseByYear = aggregateToYearly(expense);
   const allYears = Array.from(new Set([...Object.keys(incomeByYear), ...Object.keys(expenseByYear)])).sort().reverse();
   if(!allYears.length) return '<div class="card"><div class="empty">No income or expenses yet.</div></div>';
   return `
@@ -515,6 +522,11 @@ function reportCategoriesByYear(){
       return `<details class="monthgroup" ${i===0?'open':''}>
         <summary><span class="mgcaret">▸</span><span class="mglabel">${yr}</span><span class="mgtotal" style="color:${net>=0?'var(--income)':'var(--expense)'}">${net>=0?'+':''}${fmt(net)}</span></summary>
         <div class="monthbody">
+          <div class="statgrid" style="margin-bottom:16px;">
+            <div class="stat"><div class="label">Total income</div><div class="value pos">+${fmt(totalIncome)}</div></div>
+            <div class="stat"><div class="label">Total expense</div><div class="value neg">-${fmt(totalExpense)}</div></div>
+            <div class="stat"><div class="label">Net</div><div class="value ${net>=0?'pos':'neg'}">${net>=0?'+':''}${fmt(net)}</div></div>
+          </div>
           <div class="subnote" style="text-transform:uppercase; letter-spacing:.04em; margin-bottom:8px;">Income</div>
           ${incomeCats.length? incomeCats.map(([cat,val])=>{
             const spent = (expenseByYear[yr] && expenseByYear[yr][cat]) || 0;
@@ -558,10 +570,14 @@ function reportCategoriesByRange(){
   <div id="rangeResultBody2">${rangeResultHtml()}</div>
   `;
 }
-function reportCategoriesByCategory(){
+function reportCategoriesByCategoryPeriod(periodType){
   const {income, expense} = monthlyCategoryMap();
-  const incomeByCat = transposeToCategory(income);
-  const expenseByCat = transposeToCategory(expense);
+  const incomeSrc = periodType==='year' ? aggregateToYearly(income) : income;
+  const expenseSrc = periodType==='year' ? aggregateToYearly(expense) : expense;
+  const incomeByCat = transposeToCategory(incomeSrc);
+  const expenseByCat = transposeToCategory(expenseSrc);
+  const periodLabel = periodType==='year' ? (k=>k) : monthLabel;
+  const periodWord = periodType==='year' ? 'year' : 'month';
   const incomeCats = Object.keys(incomeByCat).sort((a,b)=>{
     const ta = Object.values(incomeByCat[a]).reduce((s,v)=>s+v,0);
     const tb = Object.values(incomeByCat[b]).reduce((s,v)=>s+v,0);
@@ -574,22 +590,22 @@ function reportCategoriesByCategory(){
   });
   return `
   <details class="cardgroup monthgroup" open>
-    <summary><span class="mgcaret">▸</span><span class="mglabel">Income categories, monthwise</span></summary>
+    <summary><span class="mgcaret">▸</span><span class="mglabel">Income categories, ${periodWord}wise</span></summary>
     <div class="cardgroup-body">
-    <p class="subnote" style="margin-bottom:10px;">Tap a category to see it broken down by month.</p>
+    <p class="subnote" style="margin-bottom:10px;">Tap a category to see it broken down by ${periodWord}.</p>
     ${incomeCats.length? incomeCats.map((cat,i)=>{
-      const months = Object.entries(incomeByCat[cat]).sort((a,b)=>a[0].localeCompare(b[0])).reverse();
-      const total = months.reduce((s,[,v])=>s+v,0);
-      const max = Math.max(...months.map(m=>m[1]),1);
+      const periods = Object.entries(incomeByCat[cat]).sort((a,b)=>a[0].localeCompare(b[0])).reverse();
+      const total = periods.reduce((s,[,v])=>s+v,0);
+      const max = Math.max(...periods.map(m=>m[1]),1);
       return `<details class="monthgroup" ${i===0?'open':''}>
         <summary><span class="mgcaret">▸</span><span class="mglabel">${cat}</span><span class="mgtotal" style="color:var(--income);">+${fmt(total)}</span></summary>
         <div class="monthbody">
-        ${months.map(([mk,val])=>{
-          const spent = (expenseByCat[cat] && expenseByCat[cat][mk]) || 0;
+        ${periods.map(([pk,val])=>{
+          const spent = (expenseByCat[cat] && expenseByCat[cat][pk]) || 0;
           const net = val - spent;
           return spent>0
-            ? `<div class="barrow"><div class="barname">${monthLabel(mk)}</div><div class="bartrack"><div class="barfill" style="width:${val/max*100}%; background:var(--income)"></div></div><div class="barval" style="color:var(--income)">+${fmt(val)}</div></div>${netBadge('Received +'+fmt(val)+' &nbsp;·&nbsp; Spent -'+fmt(spent), net)}`
-            : `<div class="barrow"><div class="barname">${monthLabel(mk)}</div><div class="bartrack"><div class="barfill" style="width:${val/max*100}%; background:var(--income)"></div></div><div class="barval" style="color:var(--income)">+${fmt(val)}</div></div>`;
+            ? `<div class="barrow"><div class="barname">${periodLabel(pk)}</div><div class="bartrack"><div class="barfill" style="width:${val/max*100}%; background:var(--income)"></div></div><div class="barval" style="color:var(--income)">+${fmt(val)}</div></div>${netBadge('Received +'+fmt(val)+' &nbsp;·&nbsp; Spent -'+fmt(spent), net)}`
+            : `<div class="barrow"><div class="barname">${periodLabel(pk)}</div><div class="bartrack"><div class="barfill" style="width:${val/max*100}%; background:var(--income)"></div></div><div class="barval" style="color:var(--income)">+${fmt(val)}</div></div>`;
         }).join('')}
         </div>
       </details>`;
@@ -597,22 +613,22 @@ function reportCategoriesByCategory(){
     </div>
   </details>
   <details class="cardgroup monthgroup" open>
-    <summary><span class="mgcaret">▸</span><span class="mglabel">Expense categories, monthwise</span></summary>
+    <summary><span class="mgcaret">▸</span><span class="mglabel">Expense categories, ${periodWord}wise</span></summary>
     <div class="cardgroup-body">
-    <p class="subnote" style="margin-bottom:10px;">Tap a category to see it broken down by month. Expenses show as negative — months with income in the same category (e.g. a refund) show the net highlighted.</p>
+    <p class="subnote" style="margin-bottom:10px;">Tap a category to see it broken down by ${periodWord}. Expenses show as negative — ${periodWord}s with income in the same category (e.g. a refund) show the net highlighted.</p>
     ${expenseCats.length? expenseCats.map((cat,i)=>{
-      const months = Object.entries(expenseByCat[cat]).sort((a,b)=>a[0].localeCompare(b[0])).reverse();
-      const total = months.reduce((s,[,v])=>s+v,0);
-      const max = Math.max(...months.map(m=>m[1]),1);
+      const periods = Object.entries(expenseByCat[cat]).sort((a,b)=>a[0].localeCompare(b[0])).reverse();
+      const total = periods.reduce((s,[,v])=>s+v,0);
+      const max = Math.max(...periods.map(m=>m[1]),1);
       return `<details class="monthgroup" ${i===0?'open':''}>
         <summary><span class="mgcaret">▸</span><span class="mglabel">${cat}</span><span class="mgtotal" style="color:var(--expense);">-${fmt(total)}</span></summary>
         <div class="monthbody">
-        ${months.map(([mk,val])=>{
-          const received = (incomeByCat[cat] && incomeByCat[cat][mk]) || 0;
+        ${periods.map(([pk,val])=>{
+          const received = (incomeByCat[cat] && incomeByCat[cat][pk]) || 0;
           const net = received - val;
           return received>0
-            ? `<div class="barrow"><div class="barname">${monthLabel(mk)}</div><div class="bartrack"><div class="barfill" style="width:${val/max*100}%; background:var(--expense)"></div></div><div class="barval" style="color:var(--expense)">-${fmt(val)}</div></div>${netBadge('Spent -'+fmt(val)+' &nbsp;·&nbsp; Refunded +'+fmt(received), net)}`
-            : `<div class="barrow"><div class="barname">${monthLabel(mk)}</div><div class="bartrack"><div class="barfill" style="width:${val/max*100}%; background:var(--expense)"></div></div><div class="barval" style="color:var(--expense)">-${fmt(val)}</div></div>`;
+            ? `<div class="barrow"><div class="barname">${periodLabel(pk)}</div><div class="bartrack"><div class="barfill" style="width:${val/max*100}%; background:var(--expense)"></div></div><div class="barval" style="color:var(--expense)">-${fmt(val)}</div></div>${netBadge('Spent -'+fmt(val)+' &nbsp;·&nbsp; Refunded +'+fmt(received), net)}`
+            : `<div class="barrow"><div class="barname">${periodLabel(pk)}</div><div class="bartrack"><div class="barfill" style="width:${val/max*100}%; background:var(--expense)"></div></div><div class="barval" style="color:var(--expense)">-${fmt(val)}</div></div>`;
         }).join('')}
         </div>
       </details>`;
