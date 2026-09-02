@@ -775,13 +775,13 @@ function pageAdd(){
       <div class="field"><label>Date</label><input type="date" name="date" value="${v('date', todayStr())}" required></div>
 
       ${addType==='expense' ? `
-        <div class="field"><label>Category</label><select name="category" id="catSelect">${state.categories.map(c=>`<option ${v('category')===c?'selected':''}>${c}</option>`).join('')}<option value="__new__">+ Add new category…</option></select>
+        <div class="field"><label>Category</label><select name="category" id="catSelect">${[...state.categories].sort((a,b)=>a.localeCompare(b)).map(c=>`<option ${v("category")===c?"selected":""}>${c}</option>`).join('')}<option value="__new__">+ Add new category…</option></select>
         <input type="text" name="newCategory" id="newCatInput" placeholder="New category name" style="display:none; margin-top:8px;"></div>
         <div class="field"><label>Amount</label><input type="number" step="0.01" min="0" name="amount" required placeholder="0.00" value="${v('amount')}"></div>
       ` : ''}
 
       ${addType==='income' ? `
-        <div class="field"><label>Category</label><select name="category" id="catSelect">${state.categories.map(c=>`<option ${v('category')===c?'selected':''}>${c}</option>`).join('')}<option value="__new__">+ Add new category…</option></select>
+        <div class="field"><label>Category</label><select name="category" id="catSelect">${[...state.categories].sort((a,b)=>a.localeCompare(b)).map(c=>`<option ${v("category")===c?"selected":""}>${c}</option>`).join('')}<option value="__new__">+ Add new category…</option></select>
         <input type="text" name="newCategory" id="newCatInput" placeholder="New category name" style="display:none; margin-top:8px;"></div>
         <div class="field"><label>Amount</label><input type="number" step="0.01" min="0" name="amount" required placeholder="0.00" value="${v('amount')}"></div>
       ` : ''}
@@ -1348,7 +1348,7 @@ function pageLoans(){
     </form>
     <div class="divider"></div>
     <div>
-      ${state.categories.map(c=>`<span class="tag loan" style="margin:0 6px 6px 0; display:inline-flex; align-items:center; gap:6px;">${c}<button class="delbtn" style="padding:0; color:inherit;" data-delcat="${c}">✕</button></span>`).join('')}
+      ${[...state.categories].sort((a,b)=>a.localeCompare(b)).map(c=>`<span class="tag loan" style="margin:0 6px 6px 0; display:inline-flex; align-items:center; gap:6px;">${c}<button class="delbtn" style="padding:0; color:inherit;" data-delcat="${c}">✕</button></span>`).join('')}
     </div>
     </div>
   </details>
