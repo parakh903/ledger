@@ -230,6 +230,30 @@ const TYPE_META = {
 let state = { transactions:[], loans:[], categories:[...DEFAULT_CATEGORIES], settings:{ bankOpeningBalance:0, bankOpeningDate: '1970-01-01', bankSnapshots:[] }, loaded:false };
 let currentTab = 'reports';
 let reportView = 'monthly';
+let reportGroup = 'cashflow';
+const REPORT_GROUPS = [
+  {id:'cashflow', label:'Cash Flow', views:[
+    {id:'monthly', label:'Monthly income vs expense'},
+    {id:'categories', label:'Category breakdown'},
+    {id:'range', label:'Range summary'},
+    {id:'sources', label:'Income sources'},
+  ]},
+  {id:'balances', label:'Balances', views:[
+    {id:'bank', label:'Bank running balance'},
+    {id:'loans', label:'Loan balances'},
+    {id:'networth', label:'Net worth'},
+  ]},
+  {id:'property', label:'Property', views:[
+    {id:'property', label:'Investment property'},
+  ]},
+  {id:'insights', label:'Insights', views:[
+    {id:'yearly', label:'Yearly summary'},
+    {id:'reconcile', label:'Reconciliation health'},
+    {id:'biggest', label:'Biggest transactions'},
+    {id:'averages', label:'Averages & extremes'},
+    {id:'lottery', label:'Lottery'},
+  ]},
+];
 let addType = 'expense';
 let editingTxId = null;
 let editingLoanId = null;
@@ -317,7 +341,6 @@ async function cloudSaveAll(){
 }
 
 let categoryViewMode = 'month'; // 'month' or 'category'
-let moreReportView = 'range';
 let rangeType = 'month'; // 'month' | 'quarter' | 'year' | 'custom'
 let rangeMonth = todayStr().slice(0,7);
 let rangeYear = todayStr().slice(0,4);
@@ -480,6 +503,38 @@ function totalLoanBalanceAsOf(date){
 }
 function netWorthAsOf(date){
   return calcBankBalanceAsOf(date) - totalLoanBalanceAsOf(date);
+}
+function loanInterestPeriods(loan){
+  const snaps = [{date: loan.startDate || '1970-01-01', balance: Number(loan.openingBalance)||0}, ...(loan.snapshots||[])]
+    .filter(s=>s.date)
+    .sort((a,b)=>a.date.localeCompare(b.date));
+  const dedup = [];
+  snaps.forEach(s=>{ if(dedup.length && dedup[dedup.length-1].date===s.date) dedup[dedup.length-1]=s; else dedup.push(s); });
+  const periods = [];
+  for(let i=0;i<dedup.length-1;i++){
+    const start = dedup[i], end = dedup[i+1];
+    const payments = state.transactions.filter(t=>t.type==='loan_payment' && t.loanId===loan.id && t.date>start.date && t.date<=end.date);
+    const totalPaid = payments.reduce((s,t)=>s+t.amount,0);
+    const principal = start.balance - end.balance;
+    const interest = totalPaid - principal;
+    const days = Math.max(1, (new Date(end.date) - new Date(start.date))/86400000);
+    periods.push({from:start.date, to:end.date, days, totalPaid, principal, interest, startBalance:start.balance, endBalance:end.balance});
+  }
+  return periods;
+}
+function loanPayoffProjection(loan){
+  const periods = loanInterestPeriods(loan);
+  if(!periods.length) return {possible:false};
+  const trailing = periods.slice(-6);
+  const totalPrincipal = trailing.reduce((s,p)=>s+p.principal,0);
+  const totalDays = trailing.reduce((s,p)=>s+p.days,0);
+  const currentBalance = loanBalance(loan);
+  if(totalDays<=0 || totalPrincipal<=0 || currentBalance<=0) return {possible:false};
+  const principalPerDay = totalPrincipal/totalDays;
+  const daysRemaining = currentBalance/principalPerDay;
+  const payoffDate = new Date(Date.now() + daysRemaining*86400000);
+  const monthsRemaining = daysRemaining/30.44;
+  return {possible:true, monthsRemaining, payoffDate, principalPerDay, periodsUsed: trailing.length};
 }
 function describeTx(t){
   const meta = TYPE_META[t.type];
@@ -949,19 +1004,12 @@ function reportsSnapshot(){
   `;
 }
 function pageReports(){
-  const views = [
-    {id:'monthly', label:'Monthly income vs expense'},
-    {id:'bank', label:'Bank running balance'},
-    {id:'loans', label:'Loan balances'},
-    {id:'property', label:'Investment property'},
-    {id:'categories', label:'Category breakdown'},
-    {id:'lottery', label:'Lottery'},
-    {id:'more', label:'Other reports'},
-  ];
+  const group = REPORT_GROUPS.find(g=>g.id===reportGroup) || REPORT_GROUPS[0];
   return `
   <div class="pagehead"><h2>Reports</h2><p>Everything derived from your entries</p></div>
   ${reportsSnapshot()}
-  <div class="chips">${views.map(v=>`<div class="chip ${reportView===v.id?'active':''}" data-report="${v.id}">${v.label}</div>`).join('')}</div>
+  <div class="chips" style="margin-bottom:10px;">${REPORT_GROUPS.map(g=>`<div class="chip ${reportGroup===g.id?'active':''}" data-reportgroup="${g.id}">${g.label}</div>`).join('')}</div>
+  ${group.views.length>1 ? `<div class="chips" style="margin-bottom:16px;">${group.views.map(v=>`<div class="chip ${reportView===v.id?'active':''}" data-report="${v.id}" style="font-size:13px; padding:8px 14px;">${v.label}</div>`).join('')}</div>` : ''}
   <div id="reportBody">${renderReportBody()}</div>
   `;
 }
@@ -972,7 +1020,13 @@ function renderReportBody(){
   if(reportView==='property') return reportProperty();
   if(reportView==='categories') return reportCategories();
   if(reportView==='lottery') return reportLottery();
-  if(reportView==='more') return reportMore();
+  if(reportView==='range') return reportRange();
+  if(reportView==='networth') return reportNetWorth();
+  if(reportView==='yearly') return reportYearly();
+  if(reportView==='sources') return reportIncomeSources();
+  if(reportView==='reconcile') return reportReconciliation();
+  if(reportView==='biggest') return reportBiggest();
+  if(reportView==='averages') return reportAverages();
   return '';
 }
 function reportMonthly(){
@@ -1040,26 +1094,64 @@ function reportBank(){
 function reportLoans(){
   if(!state.loans.length) return '<div class="card"><div class="empty">No loans set up yet. Add one in Loans & Setup.</div></div>';
   const expandButtons = `<div class="row" style="margin-bottom:16px; gap:8px;">
-    <button class="btn btn-ghost" type="button" data-expandall="1" data-expandscope="reportBody" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Expand all years</button>
-    <button class="btn btn-ghost" type="button" data-expandall="0" data-expandscope="reportBody" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Collapse all years</button>
+    <button class="btn btn-ghost" type="button" data-expandall="1" data-expandscope="reportBody" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Expand all</button>
+    <button class="btn btn-ghost" type="button" data-expandall="0" data-expandscope="reportBody" style="flex:0 0 auto; font-size:13px; padding:8px 14px;">Collapse all</button>
   </div>`;
   return expandButtons + state.loans.map(l=>{
-    const tl = loanTimeline(l);
     const bal = loanBalance(l);
-    const reversed = tl.slice().reverse();
+    const periods = loanInterestPeriods(l);
+    const lifetimePrincipal = periods.reduce((s,p)=>s+p.principal,0);
+    const lifetimeInterest = periods.reduce((s,p)=>s+Math.max(0,p.interest),0);
+    const projection = loanPayoffProjection(l);
+
     const yearMap = {};
-    reversed.forEach(r=>{ const yr = (r.date||'').slice(0,4) || 'Unknown'; if(!yearMap[yr]) yearMap[yr]=[]; yearMap[yr].push(r); });
+    periods.slice().reverse().forEach(p=>{ const yr=p.to.slice(0,4); if(!yearMap[yr]) yearMap[yr]=[]; yearMap[yr].push(p); });
     const years = Object.keys(yearMap).sort().reverse();
+
+    const tl = loanTimeline(l);
+    const reversed = tl.slice().reverse();
+    const tlYearMap = {};
+    reversed.forEach(r=>{ const yr=(r.date||'').slice(0,4)||'Unknown'; if(!tlYearMap[yr]) tlYearMap[yr]=[]; tlYearMap[yr].push(r); });
+    const tlYears = Object.keys(tlYearMap).sort().reverse();
     const rowHtml = r=>`<tr><td>${r.date||'—'}</td><td>${r.checkpoint?'<strong>'+r.label+'</strong>':r.label}</td><td class="amt">${fmt(r.balance)}</td><td>${r.id?`<button class="delbtn" data-edittx="${r.id}" title="Edit">✎</button><button class="delbtn" data-del="${r.id}" title="Delete">✕</button>`:(r.checkpoint&&r.cpId?`<button class="delbtn" data-editcheckpoint="${l.id}::${r.cpId}" title="Edit">✎</button>`:'')}</td></tr>`;
+
     return `<div class="card">
       <h3>${l.name} <span style="color:var(--muted); text-transform:none; font-weight:400;">— ${l.type==='investment'?'Investment property':'Owner-occupied'}</span></h3>
-      <div class="statgrid" style="margin-bottom:12px;"><div class="stat"><div class="label">Current balance</div><div class="value">${fmt(bal)}</div></div><div class="stat"><div class="label">Opening balance</div><div class="value">${fmt(l.openingBalance)}</div></div></div>
-      ${years.map((yr,i)=>`<details class="monthgroup" ${i===0?'open':''}>
-        <summary><span class="mgcaret">▸</span><span class="mglabel">${yr}</span><span class="mgtotal">${yearMap[yr].length} entr${yearMap[yr].length===1?'y':'ies'}</span></summary>
-        <div class="monthbody"><table><thead><tr><th>Date</th><th>Event</th><th class="amt">Balance</th><th></th></tr></thead><tbody>
-        ${yearMap[yr].map(rowHtml).join('')}
-        </tbody></table></div>
-      </details>`).join('')}
+      <div class="statgrid" style="margin-bottom:14px;">
+        <div class="stat"><div class="label">Current balance</div><div class="value">${fmt(bal)}</div></div>
+        <div class="stat"><div class="label">Lifetime principal paid</div><div class="value pos">${fmt(lifetimePrincipal)}</div></div>
+        <div class="stat"><div class="label">Lifetime interest paid</div><div class="value neg">${fmt(lifetimeInterest)}</div></div>
+        <div class="stat"><div class="label">Projected payoff</div><div class="value">${projection.possible? projection.payoffDate.toLocaleDateString(undefined,{month:'short',year:'numeric'}) : '—'}</div></div>
+      </div>
+      ${projection.possible
+        ? `<p class="subnote" style="margin-bottom:16px;">At your recent pace (last ${projection.periodsUsed} checkpoint period${projection.periodsUsed===1?'':'s'}), that's about <strong>${Math.round(projection.monthsRemaining)} months</strong> (~${(projection.monthsRemaining/12).toFixed(1)} years) away. This is an estimate from your average principal reduction — not a real amortization schedule, since the app doesn't know your interest rate or exact loan terms.</p>`
+        : `<p class="subnote" style="margin-bottom:16px;">Not enough checkpoint history yet to project a payoff date — add at least two monthly balances for this loan, spaced apart, to unlock this.</p>`}
+
+      <h3 style="margin-top:4px;">Principal vs interest, by period</h3>
+      <p class="subnote" style="margin-bottom:10px;">Derived from your payment amounts and monthly balance checkpoints: whatever the balance actually dropped by is principal — the rest of what you paid that period was interest.</p>
+      ${years.length? years.map((yr,i)=>{
+        const yrPeriods = yearMap[yr];
+        const yrPrincipal = yrPeriods.reduce((s,p)=>s+p.principal,0);
+        const yrInterest = yrPeriods.reduce((s,p)=>s+p.interest,0);
+        return `<details class="monthgroup" ${i===0?'open':''}>
+          <summary><span class="mgcaret">▸</span><span class="mglabel">${yr}</span><span class="mgtotal">Principal ${fmt(yrPrincipal)} · Interest ${fmt(yrInterest)}</span></summary>
+          <div class="monthbody"><table><thead><tr><th>Period</th><th class="amt">Paid</th><th class="amt">Principal</th><th class="amt">Interest</th></tr></thead><tbody>
+          ${yrPeriods.map(p=>`<tr><td>${p.from} → ${p.to}</td><td class="amt">${fmt(p.totalPaid)}</td><td class="amt" style="color:var(--income)">${fmt(p.principal)}</td><td class="amt" style="color:var(--expense)">${fmt(p.interest)}${p.interest<0?' ⚠':''}</td></tr>`).join('')}
+          </tbody></table></div>
+        </details>`;
+      }).join('') : '<div class="empty">Not enough balance checkpoints yet to compute a split — add at least two monthly balances for this loan.</div>'}
+
+      <details class="monthgroup" style="margin-top:6px;">
+        <summary><span class="mgcaret">▸</span><span class="mglabel">Raw balance history</span></summary>
+        <div class="monthbody">
+        ${tlYears.map((yr,i)=>`<details class="monthgroup" ${i===0?'open':''}>
+          <summary><span class="mgcaret">▸</span><span class="mglabel">${yr}</span><span class="mgtotal">${tlYearMap[yr].length} entr${tlYearMap[yr].length===1?'y':'ies'}</span></summary>
+          <div class="monthbody"><table><thead><tr><th>Date</th><th>Event</th><th class="amt">Balance</th><th></th></tr></thead><tbody>
+          ${tlYearMap[yr].map(rowHtml).join('')}
+          </tbody></table></div>
+        </details>`).join('')}
+        </div>
+      </details>
     </div>`;
   }).join('');
 }
@@ -1123,31 +1215,6 @@ function reportLottery(){
 }
 
 /* ============ OTHER REPORTS ============ */
-function reportMore(){
-  const subs = [
-    {id:'range', label:'Range summary'},
-    {id:'networth', label:'Net worth'},
-    {id:'yearly', label:'Yearly summary'},
-    {id:'sources', label:'Income sources'},
-    {id:'reconcile', label:'Reconciliation health'},
-    {id:'biggest', label:'Biggest transactions'},
-    {id:'averages', label:'Averages & extremes'},
-  ];
-  return `
-  <div class="chips" style="margin-bottom:16px;">${subs.map(s=>`<div class="chip ${moreReportView===s.id?'active':''}" data-morereport="${s.id}">${s.label}</div>`).join('')}</div>
-  <div id="moreReportBody">${renderMoreReportBody()}</div>
-  `;
-}
-function renderMoreReportBody(){
-  if(moreReportView==='range') return reportRange();
-  if(moreReportView==='networth') return reportNetWorth();
-  if(moreReportView==='yearly') return reportYearly();
-  if(moreReportView==='sources') return reportIncomeSources();
-  if(moreReportView==='reconcile') return reportReconciliation();
-  if(moreReportView==='biggest') return reportBiggest();
-  if(moreReportView==='averages') return reportAverages();
-  return '';
-}
 
 function rangeBounds(){
   if(rangeType==='month') return {from: rangeMonth+'-01', to: rangeMonth+'-31', label: monthLabel(rangeMonth)};
@@ -1595,8 +1662,13 @@ function attachHandlers(){
   document.querySelectorAll('[data-catview]').forEach(el=>{
     el.onclick = ()=>{ categoryViewMode = el.dataset.catview; document.getElementById('reportBody').innerHTML = renderReportBody(); attachHandlers(); };
   });
-  document.querySelectorAll('[data-morereport]').forEach(el=>{
-    el.onclick = ()=>{ moreReportView = el.dataset.morereport; document.querySelectorAll('[data-morereport]').forEach(c=>c.classList.toggle('active', c.dataset.morereport===moreReportView)); document.getElementById('moreReportBody').innerHTML = renderMoreReportBody(); attachHandlers(); };
+  document.querySelectorAll('[data-reportgroup]').forEach(el=>{
+    el.onclick = ()=>{
+      reportGroup = el.dataset.reportgroup;
+      const g = REPORT_GROUPS.find(x=>x.id===reportGroup);
+      reportView = g.views[0].id;
+      render();
+    };
   });
   const rangeTypeSelect = document.getElementById('rangeTypeSelect');
   if(rangeTypeSelect) rangeTypeSelect.onchange = ()=>{
