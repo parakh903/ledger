@@ -185,6 +185,8 @@ td.amt, th.amt{text-align:right; font-family:'IBM Plex Mono',monospace;}
   .barrow .barname{width:88px;}
 }
 </style>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 </head>
 <body>
 <div id="app">
@@ -242,6 +244,78 @@ const storage = (typeof window.storage === 'object' && window.storage && typeof 
       async set(key, value){ try{ localStorage.setItem('ledger:'+key, value); return {key, value}; }catch(e){ return null; } },
       async delete(key){ try{ localStorage.removeItem('ledger:'+key); return {key, deleted:true}; }catch(e){ return null; } },
     };
+
+/* ============ CLOUD SYNC (optional — for sharing with family) ============ */
+let cloudEnabled = false;
+let cloudInitializing = false;
+let firestoreDoc = null;
+let unsubscribeSnapshot = null;
+let suppressNextSnapshot = false;
+
+function loadCloudConfig(){
+  try{ const raw = localStorage.getItem('ledger_cloud_config'); return raw ? JSON.parse(raw) : null; }catch(e){ return null; }
+}
+function saveCloudConfig(cfg){
+  try{ localStorage.setItem('ledger_cloud_config', JSON.stringify(cfg)); return true; }catch(e){ return false; }
+}
+function clearCloudConfig(){
+  try{ localStorage.removeItem('ledger_cloud_config'); return true; }catch(e){ return false; }
+}
+async function initCloudSync(){
+  const cfg = loadCloudConfig();
+  if(!cfg || !cfg.firebaseConfig || !cfg.householdId) return false;
+  try{
+    if(!firebase.apps || !firebase.apps.length){ firebase.initializeApp(cfg.firebaseConfig); }
+    const db = firebase.firestore();
+    firestoreDoc = db.collection('households').doc(cfg.householdId);
+    cloudEnabled = true;
+    return true;
+  }catch(e){
+    console.error('Cloud sync init failed', e);
+    cloudEnabled = false;
+    return false;
+  }
+}
+function startCloudListener(){
+  if(!cloudEnabled || !firestoreDoc) return;
+  if(unsubscribeSnapshot) unsubscribeSnapshot();
+  unsubscribeSnapshot = firestoreDoc.onSnapshot(doc=>{
+    if(doc.metadata.hasPendingWrites) return; // our own local write, not yet confirmed — we already have this data
+    if(!doc.exists) return;
+    const data = doc.data();
+    state.transactions = data.transactions || [];
+    state.loans = data.loans || [];
+    state.categories = data.categories || [...DEFAULT_CATEGORIES];
+    state.settings = data.settings || state.settings;
+    state.loans.forEach(l=>{ if(!l.snapshots) l.snapshots = []; });
+    if(!state.settings.bankSnapshots) state.settings.bankSnapshots = [];
+    render();
+    if(!suppressNextSnapshot) showToast('Synced from cloud');
+    suppressNextSnapshot = false;
+  }, err=>{
+    console.error('Cloud sync error', err);
+    showToast('Cloud sync error — check your connection');
+  });
+}
+async function cloudSaveAll(){
+  if(!cloudEnabled || !firestoreDoc) return false;
+  try{
+    suppressNextSnapshot = true;
+    await firestoreDoc.set({
+      transactions: state.transactions,
+      loans: state.loans,
+      categories: state.categories,
+      settings: state.settings,
+      updatedAt: Date.now()
+    });
+    return true;
+  }catch(e){
+    console.error('Cloud save failed', e);
+    showToast('Cloud save failed — check your connection');
+    return false;
+  }
+}
+
 let categoryViewMode = 'month'; // 'month' or 'category'
 let moreReportView = 'range';
 let rangeType = 'month'; // 'month' | 'quarter' | 'year' | 'custom'
@@ -269,18 +343,7 @@ function showConfirm(message, onYes, yesLabel){
 }
 
 /* ============ STORAGE ============ */
-async function loadState(){
-  try{ const r = await storage.get('transactions'); state.transactions = r? JSON.parse(r.value): []; }catch(e){ state.transactions=[]; }
-  try{ const r = await storage.get('loans'); state.loans = r? JSON.parse(r.value): []; }catch(e){ state.loans=[]; }
-  try{ const r = await storage.get('settings'); state.settings = r? JSON.parse(r.value): {bankOpeningBalance:0,bankOpeningDate:'1970-01-01',bankSnapshots:[]}; }catch(e){ state.settings={bankOpeningBalance:0,bankOpeningDate:'1970-01-01',bankSnapshots:[]}; }
-  try{
-    const r = await storage.get('categories');
-    const parsed = r? JSON.parse(r.value): [...DEFAULT_CATEGORIES];
-    state.categories = Array.isArray(parsed) ? parsed : Array.from(new Set([...(parsed.expense||[]), ...(parsed.income||[])]));
-  }catch(e){ state.categories = [...DEFAULT_CATEGORIES]; }
-  if(!state.settings.bankSnapshots) state.settings.bankSnapshots = [];
-  state.loans.forEach(l=>{ if(!l.snapshots) l.snapshots = []; });
-  ['Other Income','Other Expense','Lottery'].forEach(c=>{ if(!state.categories.includes(c)) state.categories.push(c); });
+async function runMigrations(){
   let migrated = false;
   state.transactions.forEach(t=>{
     if(t.type==='lottery_expense'){ t.type='expense'; t.category='Lottery'; migrated=true; }
@@ -293,14 +356,63 @@ async function loadState(){
       migrated = true;
     }
   });
-  if(migrated) saveTransactions();
+  ['Other Income','Other Expense','Lottery'].forEach(c=>{ if(!state.categories.includes(c)) state.categories.push(c); });
+  if(migrated) await saveTransactions();
+}
+async function cloudLoadOnce(){
+  try{
+    const snap = await firestoreDoc.get();
+    if(snap.exists){
+      const data = snap.data();
+      state.transactions = data.transactions || [];
+      state.loans = data.loans || [];
+      state.categories = data.categories || [...DEFAULT_CATEGORIES];
+      state.settings = data.settings || state.settings;
+      return true;
+    }
+  }catch(e){ console.error('Cloud load failed', e); }
+  return false;
+}
+async function loadState(){
+  const cloudCfg = loadCloudConfig();
+  if(cloudCfg && cloudCfg.firebaseConfig && cloudCfg.householdId){
+    const ok = await initCloudSync();
+    if(ok){
+      const gotData = await cloudLoadOnce();
+      if(!gotData){
+        state.transactions = [];
+        state.loans = [];
+        state.categories = [...DEFAULT_CATEGORIES];
+        state.settings = {bankOpeningBalance:0, bankOpeningDate:'1970-01-01', bankSnapshots:[]};
+      }
+      if(!state.settings.bankSnapshots) state.settings.bankSnapshots = [];
+      state.loans.forEach(l=>{ if(!l.snapshots) l.snapshots = []; });
+      await runMigrations();
+      state.loaded = true;
+      startCloudListener();
+      render();
+      return;
+    }
+    showToast('Could not connect to cloud sync — using local data instead');
+  }
+  try{ const r = await storage.get('transactions'); state.transactions = r? JSON.parse(r.value): []; }catch(e){ state.transactions=[]; }
+  try{ const r = await storage.get('loans'); state.loans = r? JSON.parse(r.value): []; }catch(e){ state.loans=[]; }
+  try{ const r = await storage.get('settings'); state.settings = r? JSON.parse(r.value): {bankOpeningBalance:0,bankOpeningDate:'1970-01-01',bankSnapshots:[]}; }catch(e){ state.settings={bankOpeningBalance:0,bankOpeningDate:'1970-01-01',bankSnapshots:[]}; }
+  try{
+    const r = await storage.get('categories');
+    const parsed = r? JSON.parse(r.value): [...DEFAULT_CATEGORIES];
+    state.categories = Array.isArray(parsed) ? parsed : Array.from(new Set([...(parsed.expense||[]), ...(parsed.income||[])]));
+  }catch(e){ state.categories = [...DEFAULT_CATEGORIES]; }
+  if(!state.settings.bankSnapshots) state.settings.bankSnapshots = [];
+  state.loans.forEach(l=>{ if(!l.snapshots) l.snapshots = []; });
+  await runMigrations();
   state.loaded = true;
   render();
 }
-async function saveTransactions(){ try{ await storage.set('transactions', JSON.stringify(state.transactions)); }catch(e){ showToast('Save failed — try again'); } }
-async function saveLoans(){ try{ await storage.set('loans', JSON.stringify(state.loans)); }catch(e){ showToast('Save failed — try again'); } }
-async function saveSettings(){ try{ await storage.set('settings', JSON.stringify(state.settings)); }catch(e){ showToast('Save failed — try again'); } }
-async function saveCategories(){ try{ await storage.set('categories', JSON.stringify(state.categories)); }catch(e){ showToast('Save failed — try again'); } }
+async function saveTransactions(){ try{ await storage.set('transactions', JSON.stringify(state.transactions)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
+async function saveLoans(){ try{ await storage.set('loans', JSON.stringify(state.loans)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
+async function saveSettings(){ try{ await storage.set('settings', JSON.stringify(state.settings)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
+async function saveCategories(){ try{ await storage.set('categories', JSON.stringify(state.categories)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
 
 async function addTransaction(tx){ tx.id = uid(); state.transactions.push(tx); await saveTransactions(); showToast('Entry saved'); currentTab='dashboard'; render(); }
 async function deleteTransaction(id){ state.transactions = state.transactions.filter(t=>t.id!==id); await saveTransactions(); render(); }
@@ -1292,6 +1404,45 @@ function renderCheckpointList(){
 }
 
 /* ============ PAGE: LOANS & SETUP ============ */
+function cloudSyncCardBody(){
+  const cfg = loadCloudConfig();
+  if(cloudEnabled && cfg){
+    return `
+    <p class="subnote" style="margin-bottom:12px;">✅ Connected — sharing live data under household ID "<strong>${escapeHtml(cfg.householdId)}</strong>". Anyone who connects with this same ID and Firebase project sees and edits the same data in real time.</p>
+    <button class="btn btn-ghost" type="button" id="cloudDisconnectBtn">Disconnect (go back to local-only)</button>
+    `;
+  }
+  return `
+  <p class="subnote" style="margin-bottom:12px;">Share this ledger with your wife (or anyone) so you both see the same data live, on your own devices. This uses a free Google Firebase database instead of your phone's local storage.</p>
+  <p class="subnote" style="margin-bottom:12px;"><strong>One-time setup</strong> (do this once, on either device):</p>
+  <ol class="subnote" style="margin:0 0 12px 18px; padding:0; line-height:1.7;">
+    <li>Go to <span class="mono">console.firebase.google.com</span>, sign in, create a free project.</li>
+    <li>In the project, go to <strong>Build → Firestore Database</strong>, click Create database, pick any region, start in <em>test mode</em> (we'll lock it down below).</li>
+    <li>Go to <strong>Project settings</strong> (gear icon) → scroll to "Your apps" → click the web icon (&lt;/&gt;) → register an app (any nickname) → copy the <span class="mono">firebaseConfig</span> object it shows you.</li>
+    <li>Paste that whole object into the box below.</li>
+    <li>Pick a "Household ID" — any word only you two will use, e.g. "parakh-family-2026".</li>
+    <li>In Firestore → Rules, replace the rules with the ones shown below this form, then Publish.</li>
+  </ol>
+  <form id="cloudConnectForm">
+    <div class="field"><label>Paste your firebaseConfig object here</label>
+      <textarea name="firebaseConfigText" rows="6" placeholder='{ apiKey: "...", authDomain: "...", projectId: "...", ... }' style="width:100%; background:var(--surface-2); border:1px solid var(--line-strong); color:var(--text); padding:10px 12px; border-radius:8px; font-family:'IBM Plex Mono',monospace; font-size:12.5px;"></textarea>
+    </div>
+    <div class="field"><label>Household ID (both people must use the exact same value)</label><input type="text" name="householdId" placeholder="e.g. parakh-family-2026"></div>
+    <button class="btn" type="submit">Connect</button>
+  </form>
+  <div class="divider"></div>
+  <p class="subnote" style="margin-bottom:8px;"><strong>Firestore security rules</strong> — paste this in Firestore → Rules, replacing what's there, then Publish:</p>
+  <pre style="background:var(--surface-2); border:1px solid var(--line-strong); border-radius:8px; padding:12px; font-family:'IBM Plex Mono',monospace; font-size:11.5px; overflow-x:auto; white-space:pre;">rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /households/{householdId} {
+      allow read, write: if true;
+    }
+  }
+}</pre>
+  <p class="subnote" style="margin-top:10px;">⚠️ Honest security note: these rules mean anyone who knows both your Firebase project's config and your exact Household ID could read or write this data — there's no password check. That's roughly the security of an unlisted shared link, which is reasonable for two people sharing personal budget data, but not bank-grade. Pick a Household ID that isn't easy to guess, and don't share it publicly. If you want real login-based security later, that's a bigger upgrade (Firebase Authentication) — just ask.</p>
+  `;
+}
 function pageLoans(){
   return `
   <div class="pagehead"><h2>Loans & Setup</h2><p>Manage home loans and your bank opening balance</p></div>
@@ -1411,6 +1562,13 @@ function pageLoans(){
       <button class="btn btn-ghost" id="exportCsvBtn" type="button">Export transactions (CSV)</button>
     </div>
     <p class="subnote" style="margin-top:10px;">The CSV is a readable spreadsheet of every transaction, in the same format the Bulk Add tool accepts — handy for opening in Excel/Numbers, or re-importing elsewhere. It doesn't include loans, checkpoints, or categories — for a complete restore, use the JSON export instead.</p>
+    </div>
+  </details>
+
+  <details class="cardgroup monthgroup">
+    <summary><span class="mgcaret">▸</span><span class="mglabel">Cloud sync (share with family)</span></summary>
+    <div class="cardgroup-body">
+    ${cloudSyncCardBody()}
     </div>
   </details>
 
@@ -1781,6 +1939,51 @@ function attachHandlers(){
         render();
       });
     }, 'Recompute');
+  };
+  const cloudConnectForm = document.getElementById('cloudConnectForm');
+  if(cloudConnectForm) cloudConnectForm.onsubmit = (e)=>{
+    e.preventDefault();
+    const fd = new FormData(cloudConnectForm);
+    const configText = (fd.get('firebaseConfigText')||'').trim();
+    const householdId = (fd.get('householdId')||'').trim();
+    if(!configText || !householdId){ showToast('Fill in both the config and a Household ID'); return; }
+    let firebaseConfig;
+    try{
+      firebaseConfig = new Function('return (' + configText + ')')();
+      if(!firebaseConfig || typeof firebaseConfig!=='object' || !firebaseConfig.apiKey) throw new Error('bad config');
+    }catch(err){ showToast('Could not read that config — paste the exact object from Firebase'); return; }
+    showConfirm(
+      'Connect this device to household "'+householdId+'"? If data already exists there, it will replace what\'s on this device. If this is the first device to connect, your current local data will be uploaded to start the shared ledger.',
+      async ()=>{
+        saveCloudConfig({firebaseConfig, householdId});
+        showToast('Connecting…');
+        const ok = await initCloudSync();
+        if(!ok){ showToast('Connection failed — check the config and try again'); clearCloudConfig(); render(); return; }
+        const existed = await cloudLoadOnce();
+        if(!existed){
+          suppressNextSnapshot = true;
+          await firestoreDoc.set({ transactions: state.transactions, loans: state.loans, categories: state.categories, settings: state.settings, updatedAt: Date.now() });
+        }
+        state.loans.forEach(l=>{ if(!l.snapshots) l.snapshots = []; });
+        if(!state.settings.bankSnapshots) state.settings.bankSnapshots = [];
+        await runMigrations();
+        startCloudListener();
+        showToast('Connected — sharing live now');
+        render();
+      },
+      'Connect'
+    );
+  };
+  const cloudDisconnectBtn = document.getElementById('cloudDisconnectBtn');
+  if(cloudDisconnectBtn) cloudDisconnectBtn.onclick = ()=>{
+    showConfirm('Disconnect from cloud sync? This device will go back to local-only storage — your local copy of the data stays as it is, but you\'ll stop seeing live updates from the shared household.', ()=>{
+      if(unsubscribeSnapshot){ unsubscribeSnapshot(); unsubscribeSnapshot=null; }
+      cloudEnabled = false;
+      firestoreDoc = null;
+      clearCloudConfig();
+      showToast('Disconnected from cloud sync');
+      render();
+    }, 'Disconnect');
   };
   const eraseAllBtn = document.getElementById('eraseAllBtn');
   if(eraseAllBtn) eraseAllBtn.onclick = ()=>{
