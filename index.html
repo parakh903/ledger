@@ -1474,9 +1474,19 @@ function renderCheckpointList(){
 function cloudSyncCardBody(){
   const cfg = loadCloudConfig();
   if(cloudEnabled && cfg){
+    const configText = JSON.stringify(cfg.firebaseConfig, null, 2);
     return `
     <p class="subnote" style="margin-bottom:12px;">✅ Connected — sharing live data under household ID "<strong>${escapeHtml(cfg.householdId)}</strong>". Anyone who connects with this same ID and Firebase project sees and edits the same data in real time.</p>
-    <button class="btn btn-ghost" type="button" id="cloudDisconnectBtn">Disconnect (go back to local-only)</button>
+    <details class="monthgroup">
+      <summary><span class="mgcaret">▸</span><span class="mglabel">Show config & Household ID (for setting up another device)</span></summary>
+      <div class="monthbody">
+        <p class="subnote" style="margin-bottom:8px;">Household ID: <strong style="user-select:all;">${escapeHtml(cfg.householdId)}</strong></p>
+        <p class="subnote" style="margin-bottom:6px;">Firebase config (tap and hold to select all, then copy):</p>
+        <pre style="background:var(--surface-2); border:1px solid var(--line-strong); border-radius:8px; padding:12px; font-family:'IBM Plex Mono',monospace; font-size:11.5px; overflow-x:auto; white-space:pre; user-select:all;">${escapeHtml(configText)}</pre>
+        <p class="subnote" style="margin-top:10px;">This is also always retrievable directly from Firebase: console.firebase.google.com → your project → gear icon (Project settings) → scroll to "Your apps" → click your web app. The Household ID only exists here in the app though — nowhere else — so worth keeping it written down somewhere (a note, your password manager) in case both devices ever lose this data at once.</p>
+      </div>
+    </details>
+    <button class="btn btn-ghost" type="button" id="cloudDisconnectBtn" style="margin-top:12px;">Disconnect (go back to local-only)</button>
     `;
   }
   return `
