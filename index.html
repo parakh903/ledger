@@ -1477,6 +1477,10 @@ function cloudSyncCardBody(){
     const configText = JSON.stringify(cfg.firebaseConfig, null, 2);
     return `
     <p class="subnote" style="margin-bottom:12px;">✅ Connected — sharing live data under household ID "<strong>${escapeHtml(cfg.householdId)}</strong>". Anyone who connects with this same ID and Firebase project sees and edits the same data in real time.</p>
+    <div class="row" style="margin-bottom:8px;">
+      <button class="btn" type="button" id="copyCloudLinkBtn" style="flex:0 0 auto;">Copy one-tap connect link</button>
+    </div>
+    <p class="subnote" style="margin-bottom:14px;">Send this link to whoever needs to (re)connect — opening it fills everything in and connects automatically, no copy-pasting the config. If a device ever shows the blank connect form again (e.g. it lost its saved data), just re-open this same link — best if you save it as a Home Screen icon or a pinned note, so it's always one tap away.</p>
     <details class="monthgroup">
       <summary><span class="mgcaret">▸</span><span class="mglabel">Show config & Household ID (for setting up another device)</span></summary>
       <div class="monthbody">
@@ -2056,6 +2060,14 @@ function attachHandlers(){
       'Connect'
     );
   };
+  const copyCloudLinkBtn = document.getElementById('copyCloudLinkBtn');
+  if(copyCloudLinkBtn) copyCloudLinkBtn.onclick = async ()=>{
+    const cfg = loadCloudConfig();
+    if(!cfg){ showToast('Not connected yet'); return; }
+    const link = buildCloudLink(cfg);
+    const ok = await copyTextToClipboard(link);
+    showToast(ok ? 'Link copied — send it via Messages, or save it as a Home Screen icon' : 'Could not copy automatically — check browser permissions');
+  };
   const cloudDisconnectBtn = document.getElementById('cloudDisconnectBtn');
   if(cloudDisconnectBtn) cloudDisconnectBtn.onclick = ()=>{
     showConfirm('Disconnect from cloud sync? This device will go back to local-only storage — your local copy of the data stays as it is, but you\'ll stop seeing live updates from the shared household.', ()=>{
@@ -2139,6 +2151,38 @@ function attachHandlers(){
 }
 
 /* ============ INIT ============ */
+function applyCloudLinkIfPresent(){
+  try{
+    const params = new URLSearchParams(window.location.search);
+    const encoded = params.get('cloud');
+    if(!encoded) return false;
+    const decoded = JSON.parse(atob(decodeURIComponent(encoded)));
+    if(decoded && decoded.firebaseConfig && decoded.householdId){
+      saveCloudConfig(decoded);
+      return true;
+    }
+  }catch(e){ console.error('Bad cloud link', e); }
+  return false;
+}
+function buildCloudLink(cfg){
+  const encoded = encodeURIComponent(btoa(JSON.stringify(cfg)));
+  const base = window.location.origin + window.location.pathname;
+  return base + '?cloud=' + encoded;
+}
+async function copyTextToClipboard(text){
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){ await navigator.clipboard.writeText(text); return true; }
+  }catch(e){}
+  try{
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position='fixed'; ta.style.left='-9999px';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    return true;
+  }catch(e){ return false; }
+}
+applyCloudLinkIfPresent();
 loadState();
 </script>
 </body>
