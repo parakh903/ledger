@@ -165,6 +165,16 @@ td.amt, th.amt{text-align:right; font-family:'IBM Plex Mono',monospace;}
 .cardgroup-body{padding:0 20px 20px;}
 .danger-card{border-color:rgba(255,122,89,.35) !important;}
 
+.backup-banner{
+  display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;
+  background:var(--surface-2); border:1px solid var(--line-strong); border-left:3px solid var(--lottery);
+  border-radius:var(--radius); padding:14px 16px; margin-bottom:18px;
+}
+.backup-banner-text{font-size:14px; min-width:200px;}
+.backup-banner-text strong{font-family:'Fraunces',serif; font-weight:600; font-size:15px;}
+.backup-banner-actions{display:flex; gap:8px; flex-shrink:0;}
+@media (max-width:780px){ .backup-banner{padding:12px 14px;} .backup-banner-actions{width:100%;} .backup-banner-actions .btn{flex:1;} }
+
 /* ---------- Mobile: bottom tab bar like an iOS app ---------- */
 #bottomnav{display:none;}
 @media (max-width: 780px){
@@ -227,7 +237,7 @@ const TYPE_META = {
 };
 
 /* ============ STATE ============ */
-let state = { transactions:[], loans:[], categories:[...DEFAULT_CATEGORIES], settings:{ bankOpeningBalance:0, bankOpeningDate: '1970-01-01', bankSnapshots:[] }, loaded:false };
+let state = { transactions:[], loans:[], categories:[...DEFAULT_CATEGORIES], settings: defaultSettings(), loaded:false };
 let currentTab = 'reports';
 let reportView = 'monthly';
 let reportGroup = 'cashflow';
@@ -312,7 +322,7 @@ function startCloudListener(){
     state.categories = data.categories || [...DEFAULT_CATEGORIES];
     state.settings = data.settings || state.settings;
     state.loans.forEach(l=>{ if(!l.snapshots) l.snapshots = []; });
-    if(!state.settings.bankSnapshots) state.settings.bankSnapshots = [];
+    ensureSettingsDefaults();
     render();
     if(!suppressNextSnapshot) showToast('Synced from cloud');
     suppressNextSnapshot = false;
@@ -391,6 +401,7 @@ async function cloudLoadOnce(){
       state.loans = data.loans || [];
       state.categories = data.categories || [...DEFAULT_CATEGORIES];
       state.settings = data.settings || state.settings;
+      ensureSettingsDefaults();
       return true;
     }
   }catch(e){ console.error('Cloud load failed', e); }
@@ -406,9 +417,9 @@ async function loadState(){
         state.transactions = [];
         state.loans = [];
         state.categories = [...DEFAULT_CATEGORIES];
-        state.settings = {bankOpeningBalance:0, bankOpeningDate:'1970-01-01', bankSnapshots:[]};
+        state.settings = defaultSettings();
       }
-      if(!state.settings.bankSnapshots) state.settings.bankSnapshots = [];
+      ensureSettingsDefaults();
       state.loans.forEach(l=>{ if(!l.snapshots) l.snapshots = []; });
       await runMigrations();
       state.loaded = true;
@@ -420,18 +431,101 @@ async function loadState(){
   }
   try{ const r = await storage.get('transactions'); state.transactions = r? JSON.parse(r.value): []; }catch(e){ state.transactions=[]; }
   try{ const r = await storage.get('loans'); state.loans = r? JSON.parse(r.value): []; }catch(e){ state.loans=[]; }
-  try{ const r = await storage.get('settings'); state.settings = r? JSON.parse(r.value): {bankOpeningBalance:0,bankOpeningDate:'1970-01-01',bankSnapshots:[]}; }catch(e){ state.settings={bankOpeningBalance:0,bankOpeningDate:'1970-01-01',bankSnapshots:[]}; }
+  try{ const r = await storage.get('settings'); state.settings = r? JSON.parse(r.value): defaultSettings(); }catch(e){ state.settings=defaultSettings(); }
   try{
     const r = await storage.get('categories');
     const parsed = r? JSON.parse(r.value): [...DEFAULT_CATEGORIES];
     state.categories = Array.isArray(parsed) ? parsed : Array.from(new Set([...(parsed.expense||[]), ...(parsed.income||[])]));
   }catch(e){ state.categories = [...DEFAULT_CATEGORIES]; }
-  if(!state.settings.bankSnapshots) state.settings.bankSnapshots = [];
+  ensureSettingsDefaults();
   state.loans.forEach(l=>{ if(!l.snapshots) l.snapshots = []; });
   await runMigrations();
   state.loaded = true;
   render();
 }
+/* ============ BACKUP REMINDER ============ */
+function defaultSettings(){
+  return {
+    bankOpeningBalance:0, bankOpeningDate:'1970-01-01', bankSnapshots:[],
+    backupReminder: {enabled:false, mode:'monthly', dayOfMonth:1, intervalDays:30},
+    lastBackupDate: null,
+    backupDismissedDate: null
+  };
+}
+function ensureSettingsDefaults(){
+  if(!state.settings) state.settings = defaultSettings();
+  if(!state.settings.bankSnapshots) state.settings.bankSnapshots = [];
+  if(!state.settings.backupReminder) state.settings.backupReminder = {enabled:false, mode:'monthly', dayOfMonth:1, intervalDays:30};
+  if(state.settings.lastBackupDate===undefined) state.settings.lastBackupDate = null;
+  if(state.settings.backupDismissedDate===undefined) state.settings.backupDismissedDate = null;
+}
+/* Returns the most recent date (YYYY-MM-DD) by which a backup should have
+   happened, given current settings — or null if reminders are off. */
+function backupTriggerDate(){
+  const r = state.settings.backupReminder;
+  if(!r || !r.enabled) return null;
+  const today = todayStr();
+  if(r.mode==='monthly'){
+    const day = Math.min(Math.max(parseInt(r.dayOfMonth,10)||1,1),28);
+    const now = new Date(today+'T00:00:00');
+    let trigger = new Date(now.getFullYear(), now.getMonth(), day);
+    if(trigger > now) trigger = new Date(now.getFullYear(), now.getMonth()-1, day);
+    return trigger.toISOString().slice(0,10);
+  }
+  const days = Math.max(1, parseInt(r.intervalDays,10)||30);
+  if(!state.settings.lastBackupDate) return today;
+  const last = new Date(state.settings.lastBackupDate+'T00:00:00');
+  const trigger = new Date(last.getTime() + days*86400000);
+  return trigger.toISOString().slice(0,10);
+}
+function isBackupDue(){
+  const trigger = backupTriggerDate();
+  if(trigger===null) return false;
+  const today = todayStr();
+  if(trigger > today) return false;
+  const last = state.settings.lastBackupDate;
+  if(last && last >= trigger) return false;
+  return true;
+}
+function shouldShowBackupBanner(){
+  if(!isBackupDue()) return false;
+  return state.settings.backupDismissedDate !== todayStr();
+}
+function backupReminderDescription(){
+  const r = state.settings.backupReminder;
+  if(!r || !r.enabled) return '';
+  if(r.mode==='monthly') return `Reminder set for day ${r.dayOfMonth} of each month.`;
+  return `Reminder set for every ${r.intervalDays} day${r.intervalDays===1?'':'s'} since your last backup.`;
+}
+function backupBannerHtml(){
+  if(!shouldShowBackupBanner()) return '';
+  const last = state.settings.lastBackupDate;
+  const lastText = last ? `Last backup: ${last}.` : `You haven't backed up yet.`;
+  return `<div class="backup-banner" id="backupBanner">
+    <div class="backup-banner-text">
+      <strong>Time to back up your ledger</strong>
+      <div class="subnote" style="margin-top:3px;">${lastText} ${backupReminderDescription()}</div>
+    </div>
+    <div class="backup-banner-actions">
+      <button class="btn" type="button" id="backupBannerDownloadBtn">Download now</button>
+      <button class="btn btn-ghost" type="button" id="backupBannerDismissBtn">Not now</button>
+    </div>
+  </div>`;
+}
+function backupReminderModeFieldsHtml(r){
+  return r.mode==='monthly'
+    ? `<div class="field"><label>Day of month</label><input type="number" name="dayOfMonth" min="1" max="28" value="${r.dayOfMonth||1}"></div>`
+    : `<div class="field"><label>Days since last backup</label><input type="number" name="intervalDays" min="1" value="${r.intervalDays||30}"></div>`;
+}
+function downloadJsonBackup(){
+  const data = JSON.stringify({transactions:state.transactions, loans:state.loans, settings:state.settings, categories:state.categories}, null, 2);
+  const blob = new Blob([data], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'ledger-backup-'+todayStr()+'.json';
+  a.click(); URL.revokeObjectURL(url);
+}
+
 async function saveTransactions(){ try{ await storage.set('transactions', JSON.stringify(state.transactions)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
 async function saveLoans(){ try{ await storage.set('loans', JSON.stringify(state.loans)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
 async function saveSettings(){ try{ await storage.set('settings', JSON.stringify(state.settings)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
@@ -838,10 +932,12 @@ function render(){
   renderNav();
   const main = document.getElementById('main');
   if(!state.loaded){ main.innerHTML = '<div class="empty">Loading your ledger…</div>'; return; }
-  if(currentTab==='dashboard') main.innerHTML = pageDashboard();
-  else if(currentTab==='add') main.innerHTML = pageAdd();
-  else if(currentTab==='reports') main.innerHTML = pageReports();
-  else if(currentTab==='loans') main.innerHTML = pageLoans();
+  let pageHtml = '';
+  if(currentTab==='dashboard') pageHtml = pageDashboard();
+  else if(currentTab==='add') pageHtml = pageAdd();
+  else if(currentTab==='reports') pageHtml = pageReports();
+  else if(currentTab==='loans') pageHtml = pageLoans();
+  main.innerHTML = backupBannerHtml() + pageHtml;
   attachHandlers();
 }
 function renderNav(){
@@ -1643,6 +1739,27 @@ function pageLoans(){
       <button class="btn btn-ghost" id="exportCsvBtn" type="button">Export transactions (CSV)</button>
     </div>
     <p class="subnote" style="margin-top:10px;">The CSV is a readable spreadsheet of every transaction, in the same format the Bulk Add tool accepts — handy for opening in Excel/Numbers, or re-importing elsewhere. It doesn't include loans, checkpoints, or categories — for a complete restore, use the JSON export instead.</p>
+    <div class="divider"></div>
+    <h3 style="margin-bottom:10px;">Remind me to back up</h3>
+    <p class="subnote" style="margin-bottom:12px;">Last backup: <strong>${state.settings.lastBackupDate || 'never'}</strong>. When it's time, a banner appears at the top of the app with a one-tap download.</p>
+    <form id="backupReminderForm">
+      <div class="field"><label>Reminder</label>
+        <select name="reminderEnabled" id="reminderEnabledSelect">
+          <option value="off" ${!state.settings.backupReminder.enabled?'selected':''}>Off</option>
+          <option value="on" ${state.settings.backupReminder.enabled?'selected':''}>On</option>
+        </select>
+      </div>
+      <div id="backupReminderFields" style="${state.settings.backupReminder.enabled?'':'display:none;'}">
+        <div class="field"><label>Mode</label>
+          <select name="reminderMode" id="reminderModeSelect">
+            <option value="monthly" ${state.settings.backupReminder.mode==='monthly'?'selected':''}>Monthly — fixed day of month</option>
+            <option value="interval" ${state.settings.backupReminder.mode==='interval'?'selected':''}>Every few days — since last backup</option>
+          </select>
+        </div>
+        <div id="reminderModeFields">${backupReminderModeFieldsHtml(state.settings.backupReminder)}</div>
+      </div>
+      <button class="btn" type="submit" style="margin-top:6px;">Save reminder settings</button>
+    </form>
     </div>
   </details>
 
@@ -2051,7 +2168,7 @@ function attachHandlers(){
           await firestoreDoc.set({ transactions: state.transactions, loans: state.loans, categories: state.categories, settings: state.settings, updatedAt: Date.now() });
         }
         state.loans.forEach(l=>{ if(!l.snapshots) l.snapshots = []; });
-        if(!state.settings.bankSnapshots) state.settings.bankSnapshots = [];
+        ensureSettingsDefaults();
         await runMigrations();
         startCloudListener();
         showToast('Connected — sharing live now');
@@ -2085,7 +2202,7 @@ function attachHandlers(){
       state.transactions = [];
       state.loans = [];
       state.categories = [...DEFAULT_CATEGORIES];
-      state.settings = { bankOpeningBalance:0, bankOpeningDate: '1970-01-01', bankSnapshots:[] };
+      state.settings = defaultSettings();
       Promise.all([saveTransactions(), saveLoans(), saveCategories(), saveSettings()]).then(()=>{
         showToast('All data erased');
         currentTab = 'dashboard';
@@ -2095,12 +2212,41 @@ function attachHandlers(){
   };
   const exportBtn = document.getElementById('exportBtn');
   if(exportBtn) exportBtn.onclick = ()=>{
-    const data = JSON.stringify({transactions:state.transactions, loans:state.loans, settings:state.settings, categories:state.categories}, null, 2);
-    const blob = new Blob([data], {type:'application/json'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'ledger-backup-'+todayStr()+'.json';
-    a.click(); URL.revokeObjectURL(url);
+    downloadJsonBackup();
+    state.settings.lastBackupDate = todayStr();
+    saveSettings().then(()=>{ showToast('Backup downloaded'); render(); });
+  };
+  const backupBannerDownloadBtn = document.getElementById('backupBannerDownloadBtn');
+  if(backupBannerDownloadBtn) backupBannerDownloadBtn.onclick = ()=>{
+    downloadJsonBackup();
+    state.settings.lastBackupDate = todayStr();
+    saveSettings().then(()=>{ showToast('Backup downloaded'); render(); });
+  };
+  const backupBannerDismissBtn = document.getElementById('backupBannerDismissBtn');
+  if(backupBannerDismissBtn) backupBannerDismissBtn.onclick = ()=>{
+    state.settings.backupDismissedDate = todayStr();
+    saveSettings().then(render);
+  };
+  const reminderEnabledSelect = document.getElementById('reminderEnabledSelect');
+  if(reminderEnabledSelect) reminderEnabledSelect.onchange = ()=>{
+    const fieldsWrap = document.getElementById('backupReminderFields');
+    if(fieldsWrap) fieldsWrap.style.display = reminderEnabledSelect.value==='on' ? '' : 'none';
+  };
+  const reminderModeSelect = document.getElementById('reminderModeSelect');
+  if(reminderModeSelect) reminderModeSelect.onchange = ()=>{
+    const modeFields = document.getElementById('reminderModeFields');
+    if(modeFields) modeFields.innerHTML = backupReminderModeFieldsHtml({...state.settings.backupReminder, mode: reminderModeSelect.value});
+  };
+  const backupReminderForm = document.getElementById('backupReminderForm');
+  if(backupReminderForm) backupReminderForm.onsubmit = (e)=>{
+    e.preventDefault();
+    const fd = new FormData(backupReminderForm);
+    const enabled = fd.get('reminderEnabled')==='on';
+    const mode = fd.get('reminderMode') || state.settings.backupReminder.mode;
+    const dayOfMonth = fd.has('dayOfMonth') ? Math.min(Math.max(parseInt(fd.get('dayOfMonth'),10)||1,1),28) : state.settings.backupReminder.dayOfMonth;
+    const intervalDays = fd.has('intervalDays') ? Math.max(parseInt(fd.get('intervalDays'),10)||30,1) : state.settings.backupReminder.intervalDays;
+    state.settings.backupReminder = {enabled, mode, dayOfMonth, intervalDays};
+    saveSettings().then(()=>{ showToast('Reminder settings saved'); render(); });
   };
   const exportCsvBtn = document.getElementById('exportCsvBtn');
   if(exportCsvBtn) exportCsvBtn.onclick = ()=>{
@@ -2140,7 +2286,7 @@ function attachHandlers(){
         state.settings = data.settings || state.settings;
         state.categories = Array.isArray(data.categories) ? data.categories : (data.categories ? Array.from(new Set([...(data.categories.expense||[]), ...(data.categories.income||[])])) : state.categories);
         state.loans.forEach(l=>{ if(!l.snapshots) l.snapshots = []; });
-        if(!state.settings.bankSnapshots) state.settings.bankSnapshots = [];
+        ensureSettingsDefaults();
         await saveTransactions(); await saveLoans(); await saveSettings(); await saveCategories();
         showToast('Data imported');
         render();
