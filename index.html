@@ -525,6 +525,30 @@ function downloadJsonBackup(){
   a.href = url; a.download = 'ledger-backup-'+todayStr()+'.json';
   a.click(); URL.revokeObjectURL(url);
 }
+function downloadCsvBackup(){
+  const csvField = v=>{
+    const s = String(v==null? '' : v);
+    return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+  };
+  const lines = ['date,type,category,amount,notes,loan_name,principal'];
+  sortedTx().forEach(t=>{
+    const loan = t.loanId ? state.loans.find(l=>l.id===t.loanId) : null;
+    lines.push([
+      csvField(t.date),
+      csvField(t.type),
+      csvField(t.category||''),
+      csvField(t.amount),
+      csvField(t.notes||''),
+      csvField(loan? loan.name : ''),
+      csvField(t.type==='loan_payment' && t.principal!=null ? t.principal : '')
+    ].join(','));
+  });
+  const blob = new Blob([lines.join('\n')], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'ledger-transactions-'+todayStr()+'.csv';
+  a.click(); URL.revokeObjectURL(url);
+}
 
 async function saveTransactions(){ try{ await storage.set('transactions', JSON.stringify(state.transactions)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
 async function saveLoans(){ try{ await storage.set('loans', JSON.stringify(state.loans)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
@@ -2219,6 +2243,7 @@ function attachHandlers(){
   const backupBannerDownloadBtn = document.getElementById('backupBannerDownloadBtn');
   if(backupBannerDownloadBtn) backupBannerDownloadBtn.onclick = ()=>{
     downloadJsonBackup();
+    downloadCsvBackup();
     state.settings.lastBackupDate = todayStr();
     saveSettings().then(()=>{ showToast('Backup downloaded'); render(); });
   };
@@ -2249,30 +2274,7 @@ function attachHandlers(){
     saveSettings().then(()=>{ showToast('Reminder settings saved'); render(); });
   };
   const exportCsvBtn = document.getElementById('exportCsvBtn');
-  if(exportCsvBtn) exportCsvBtn.onclick = ()=>{
-    const csvField = v=>{
-      const s = String(v==null? '' : v);
-      return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
-    };
-    const lines = ['date,type,category,amount,notes,loan_name,principal'];
-    sortedTx().forEach(t=>{
-      const loan = t.loanId ? state.loans.find(l=>l.id===t.loanId) : null;
-      lines.push([
-        csvField(t.date),
-        csvField(t.type),
-        csvField(t.category||''),
-        csvField(t.amount),
-        csvField(t.notes||''),
-        csvField(loan? loan.name : ''),
-        csvField(t.type==='loan_payment' && t.principal!=null ? t.principal : '')
-      ].join(','));
-    });
-    const blob = new Blob([lines.join('\n')], {type:'text/csv'});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'ledger-transactions-'+todayStr()+'.csv';
-    a.click(); URL.revokeObjectURL(url);
-  };
+  if(exportCsvBtn) exportCsvBtn.onclick = ()=> downloadCsvBackup();
   const importFile = document.getElementById('importFile');
   if(importFile) importFile.onchange = (e)=>{
     const file = e.target.files[0]; if(!file) return;
