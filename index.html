@@ -2239,9 +2239,12 @@ function attachHandlers(){
   const backupBannerDownloadBtn = document.getElementById('backupBannerDownloadBtn');
   if(backupBannerDownloadBtn) backupBannerDownloadBtn.onclick = ()=>{
     downloadJsonBackup();
-    downloadCsvBackup();
-    state.settings.lastBackupDate = todayStr();
-    saveSettings().then(()=>{ showToast('Backup downloaded'); render(); });
+    showToast('JSON downloaded — CSV in a moment…');
+    setTimeout(()=>{
+      downloadCsvBackup();
+      state.settings.lastBackupDate = todayStr();
+      saveSettings().then(()=>{ showToast('CSV downloaded too'); render(); });
+    }, 2500);
   };
   const backupBannerDismissBtn = document.getElementById('backupBannerDismissBtn');
   if(backupBannerDismissBtn) backupBannerDismissBtn.onclick = ()=>{
