@@ -82,6 +82,7 @@ label{display:block; font-size:12px; color:var(--muted); margin-bottom:5px; lett
 .stat .value{font-family:'IBM Plex Mono',monospace; font-size:22px; font-weight:600;}
 .stat .value.pos{color:var(--income);}
 .stat .value.neg{color:var(--expense);}
+.pct{font-size:11px; opacity:.75; margin-top:2px;}
 
 table{width:100%; border-collapse:collapse; font-size:14px;}
 th{text-align:left; color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.04em; padding:8px 10px; border-bottom:1px solid var(--line-strong);}
@@ -149,7 +150,7 @@ td.amt, th.amt{text-align:right; font-family:'IBM Plex Mono',monospace;}
 .monthgroup[open] summary .mgcaret{transform:rotate(90deg);}
 .monthgroup summary .mglabel{font-family:'Inter',sans-serif; font-weight:600;}
 .monthgroup summary .mgtotal{margin-left:auto; font-family:'IBM Plex Mono',monospace;}
-.monthbody{padding:6px 4px 16px 20px;}
+.monthbody{padding:6px 4px 16px 20px; overflow-x:auto;}
 .netbadge{
   display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;
   background:var(--surface-2); border-radius:8px; padding:9px 12px; margin:-2px 0 16px; border-left:3px solid var(--line-strong);
@@ -190,7 +191,9 @@ td.amt, th.amt{text-align:right; font-family:'IBM Plex Mono',monospace;}
 @media (max-width: 780px){
   #sidebar{display:none;}
   #main{padding:18px 16px 90px; }
-  .statgrid{grid-template-columns:repeat(2,1fr);}
+  .statgrid{grid-template-columns:repeat(2,minmax(0,1fr));}
+  .stat{padding:14px;}
+  .stat .value{font-size:18px;}
   .typegrid{grid-template-columns:repeat(3,1fr);}
   .fab-recompute{bottom:calc(80px + env(safe-area-inset-bottom));}
   #bottomnav{
@@ -703,19 +706,19 @@ function loanInterestPeriods(loan){
   }
   return periods;
 }
-function loanPayoffProjection(loan){
-  const periods = loanInterestPeriods(loan);
-  if(!periods.length) return {possible:false};
-  const trailing = periods.slice(-6);
-  const totalPrincipal = trailing.reduce((s,p)=>s+p.principal,0);
-  const totalDays = trailing.reduce((s,p)=>s+p.days,0);
-  const currentBalance = loanBalance(loan);
-  if(totalDays<=0 || totalPrincipal<=0 || currentBalance<=0) return {possible:false};
-  const principalPerDay = totalPrincipal/totalDays;
-  const daysRemaining = currentBalance/principalPerDay;
-  const payoffDate = new Date(Date.now() + daysRemaining*86400000);
-  const monthsRemaining = daysRemaining/30.44;
-  return {possible:true, monthsRemaining, payoffDate, principalPerDay, periodsUsed: trailing.length};
+/* Principal/interest split of a period's payments, as percentages of what was paid (null when not meaningful). */
+function periodSplit(p){
+  if(!p || p.totalPaid<=0 || p.interest<0 || p.principal<0) return null;
+  const pp = p.principal/p.totalPaid*100;
+  return {p:pp, i:100-pp};
+}
+function fmtPct(x){ return (Math.round(x*10)/10).toFixed(x>=10||x===0?0:1)+'%'; }
+/* Annualized interest rate implied by one period: interest / average balance, scaled to a year. Only trusted for short periods. */
+function periodRate(p){
+  if(!p || p.interest<=0 || p.days>70) return null;
+  const avg = (p.startBalance + p.endBalance)/2;
+  if(avg<=0) return null;
+  return p.interest/avg*365/p.days*100;
 }
 function describeTx(t){
   const meta = TYPE_META[t.type];
@@ -1285,7 +1288,10 @@ function reportLoans(){
     const periods = loanInterestPeriods(l);
     const lifetimePrincipal = periods.reduce((s,p)=>s+p.principal,0);
     const lifetimeInterest = periods.reduce((s,p)=>s+Math.max(0,p.interest),0);
-    const projection = loanPayoffProjection(l);
+    const latestPeriod = periods.length ? periods[periods.length-1] : null;
+    const latestSplit = periodSplit(latestPeriod);
+    const latestRate = periodRate(latestPeriod);
+    const lifetimeSplit = (lifetimePrincipal+lifetimeInterest)>0 && lifetimePrincipal>=0 ? {p: lifetimePrincipal/(lifetimePrincipal+lifetimeInterest)*100, i: lifetimeInterest/(lifetimePrincipal+lifetimeInterest)*100} : null;
 
     const yearMap = {};
     periods.slice().reverse().forEach(p=>{ const yr=p.to.slice(0,4); if(!yearMap[yr]) yearMap[yr]=[]; yearMap[yr].push(p); });
@@ -1302,16 +1308,16 @@ function reportLoans(){
       <h3>${l.name} <span style="color:var(--muted); text-transform:none; font-weight:400;">— ${l.type==='investment'?'Investment property':'Owner-occupied'}</span></h3>
       <div class="statgrid" style="margin-bottom:14px;">
         <div class="stat"><div class="label">Current balance</div><div class="value">${fmt(bal)}</div></div>
+        <div class="stat"><div class="label">Est. interest rate</div><div class="value">${latestRate!==null? latestRate.toFixed(2)+'%' : '—'}</div></div>
+        <div class="stat"><div class="label">Latest split (principal / interest)</div><div class="value">${latestSplit? fmtPct(latestSplit.p)+' / '+fmtPct(latestSplit.i) : '—'}</div></div>
+        <div class="stat"><div class="label">Lifetime split (principal / interest)</div><div class="value">${lifetimeSplit? fmtPct(lifetimeSplit.p)+' / '+fmtPct(lifetimeSplit.i) : '—'}</div></div>
         <div class="stat"><div class="label">Lifetime principal paid</div><div class="value pos">${fmt(lifetimePrincipal)}</div></div>
         <div class="stat"><div class="label">Lifetime interest paid</div><div class="value neg">${fmt(lifetimeInterest)}</div></div>
-        <div class="stat"><div class="label">Projected payoff</div><div class="value">${projection.possible? projection.payoffDate.toLocaleDateString(undefined,{month:'short',year:'numeric'}) : '—'}</div></div>
       </div>
-      ${projection.possible
-        ? `<p class="subnote" style="margin-bottom:16px;">At your recent pace (last ${projection.periodsUsed} checkpoint period${projection.periodsUsed===1?'':'s'}), that's about <strong>${Math.round(projection.monthsRemaining)} months</strong> (~${(projection.monthsRemaining/12).toFixed(1)} years) away. This is an estimate from your average principal reduction — not a real amortization schedule, since the app doesn't know your interest rate or exact loan terms.</p>`
-        : `<p class="subnote" style="margin-bottom:16px;">Not enough checkpoint history yet to project a payoff date — add at least two monthly balances for this loan, spaced apart, to unlock this.</p>`}
+      <p class="subnote" style="margin-bottom:16px;">Est. interest rate = interest ÷ average balance, annualized from the latest period (shown only when that period is about two months or shorter). Splits are percentages of what you paid.</p>
 
       <h3 style="margin-top:4px;">Principal vs interest, by period</h3>
-      <p class="subnote" style="margin-bottom:10px;">Derived from your payment amounts and monthly balance checkpoints: whatever the balance actually dropped by is principal — the rest of what you paid that period was interest.</p>
+      <p class="subnote" style="margin-bottom:10px;">Derived from your payment amounts and monthly balance checkpoints: whatever the balance actually dropped by is principal — the rest of what you paid that period was interest. The small % under each amount is its share of that period's payments.</p>
       ${years.length? years.map((yr,i)=>{
         const yrPeriods = yearMap[yr];
         const yrPrincipal = yrPeriods.reduce((s,p)=>s+p.principal,0);
@@ -1319,7 +1325,7 @@ function reportLoans(){
         return `<details class="monthgroup" ${i===0?'open':''}>
           <summary><span class="mgcaret">▸</span><span class="mglabel">${yr}</span><span class="mgtotal">Principal ${fmt(yrPrincipal)} · Interest ${fmt(yrInterest)}</span></summary>
           <div class="monthbody"><table><thead><tr><th>Period</th><th class="amt">Paid</th><th class="amt">Principal</th><th class="amt">Interest</th></tr></thead><tbody>
-          ${yrPeriods.map(p=>`<tr><td>${p.from} → ${p.to}</td><td class="amt">${fmt(p.totalPaid)}</td><td class="amt" style="color:var(--income)">${fmt(p.principal)}</td><td class="amt" style="color:var(--expense)">${fmt(p.interest)}${p.interest<0?' ⚠':''}</td></tr>`).join('')}
+          ${yrPeriods.map(p=>`<tr><td>${p.from} → ${p.to}</td><td class="amt">${fmt(p.totalPaid)}</td><td class="amt" style="color:var(--income)">${fmt(p.principal)}${periodSplit(p)?`<div class="pct">${fmtPct(periodSplit(p).p)}</div>`:''}</td><td class="amt" style="color:var(--expense)">${fmt(p.interest)}${p.interest<0?' ⚠':''}${periodSplit(p)?`<div class="pct">${fmtPct(periodSplit(p).i)}</div>`:''}</td></tr>`).join('')}
           </tbody></table></div>
         </details>`;
       }).join('') : '<div class="empty">Not enough balance checkpoints yet to compute a split — add at least two monthly balances for this loan.</div>'}
@@ -1350,18 +1356,26 @@ function reportProperty(){
     const p = pos[id];
     const totalRental = p.months.reduce((s,m)=>s+m.rental,0);
     const totalPay = p.months.reduce((s,m)=>s+m.payment,0);
+    const firstPay = p.months.find(m=>m.payment>0);
+    const sinceMonths = firstPay ? p.months.filter(m=>m.month>=firstPay.month) : [];
+    const sinceRental = sinceMonths.reduce((s,m)=>s+m.rental,0);
+    const sincePay = sinceMonths.reduce((s,m)=>s+m.payment,0);
+    const preRentMonths = firstPay ? p.months.filter(m=>m.month<firstPay.month && m.rental>0).length : 0;
     const reversed = p.months.slice().reverse();
     const yearMap = {};
     reversed.forEach(m=>{ const yr = m.month.slice(0,4); if(!yearMap[yr]) yearMap[yr]=[]; yearMap[yr].push(m); });
     const years = Object.keys(yearMap).sort().reverse();
-    const rowHtml = m=>`<tr><td>${monthLabel(m.month)}</td><td class="amt" style="color:var(--income)">+${fmt(m.rental)}</td><td class="amt" style="color:var(--expense)">-${fmt(m.payment)}</td><td class="amt" style="color:${m.net>=0?'var(--income)':'var(--expense)'}">${m.net>=0?'+':''}${fmt(m.net)}</td></tr>`;
+    const rowHtml = m=>`<tr><td>${monthLabel(m.month)}</td><td class="amt" style="color:var(--income)">+${fmt(m.rental)}</td><td class="amt" style="color:var(--expense)">-${fmt(m.payment)}</td><td class="amt" style="color:${m.net>=0?'var(--income)':'var(--expense)'}">${m.net>=0?'+':''}${fmt(m.net)}${m.payment>0?`<div class="pct" style="color:var(--muted)">rent covers ${fmtPct(m.rental/m.payment*100)}</div>`:''}</td></tr>`;
     return `<div class="card">
       <h3>${p.loan.name}</h3>
       <div class="statgrid" style="margin-bottom:12px;">
         <div class="stat"><div class="label">Total rental income</div><div class="value pos">+${fmt(totalRental)}</div></div>
         <div class="stat"><div class="label">Total loan payments</div><div class="value neg">-${fmt(totalPay)}</div></div>
         <div class="stat"><div class="label">Net position (all time)</div><div class="value ${totalRental-totalPay>=0?'pos':'neg'}">${totalRental-totalPay>=0?'+':''}${fmt(totalRental-totalPay)}</div></div>
+        ${firstPay ? `<div class="stat"><div class="label">Net since first loan payment (${monthLabel(firstPay.month)})</div><div class="value ${sinceRental-sincePay>=0?'pos':'neg'}">${sinceRental-sincePay>=0?'+':''}${fmt(sinceRental-sincePay)}</div></div>
+        <div class="stat"><div class="label">Rent covers loan payments</div><div class="value">${sincePay>0? fmtPct(sinceRental/sincePay*100) : '—'}</div></div>` : ''}
       </div>
+      ${firstPay && preRentMonths>0 ? `<p class="subnote" style="margin-bottom:12px;">Rent is recorded for ${preRentMonths} month${preRentMonths===1?'':'s'} before the first loan payment (${monthLabel(firstPay.month)}), so "all time" overstates your position. The last two figures count only from the first recorded payment.</p>` : ''}
       ${p.months.length? years.map((yr,i)=>`<details class="monthgroup" ${i===0?'open':''}>
         <summary><span class="mgcaret">▸</span><span class="mglabel">${yr}</span><span class="mgtotal">${yearMap[yr].length} month${yearMap[yr].length===1?'':'s'}</span></summary>
         <div class="monthbody"><table><thead><tr><th>Month</th><th class="amt">Rental income</th><th class="amt">Loan payment</th><th class="amt">Net position</th></tr></thead><tbody>
