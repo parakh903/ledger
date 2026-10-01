@@ -550,9 +550,46 @@ function downloadCsvBackup(){
   a.click(); URL.revokeObjectURL(url);
 }
 
-async function saveTransactions(){ try{ await storage.set('transactions', JSON.stringify(state.transactions)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
+/* Re-derives every balance-checkpoint adjustment, in date order, from each checkpoint's stored target balance.
+   Runs automatically on every transaction save so adjustments never go stale. Ids are preserved (no churn),
+   and a checkpoint that currently matches exactly is kept as a hidden $0 entry so its target survives. */
+let _recomputingCheckpoints = false;
+function recomputeCheckpoints(){
+  if(_recomputingCheckpoints) return {total:0, changed:0};
+  const cps = state.transactions.filter(t=>t.isBalanceCheckpoint);
+  if(!cps.length) return {total:0, changed:0};
+  _recomputingCheckpoints = true;
+  try{
+    const before = {};
+    cps.forEach(t=>{ before[t.id] = t.type+'|'+(t.amount||0)+'|'+t.date; });
+    const targets = cps.map(t=>({...t, balance:Number(t.checkpointBalance)||0}))
+      .sort((a,b)=> a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+    state.transactions = state.transactions.filter(t=>!t.isBalanceCheckpoint);
+    let changed = 0;
+    targets.forEach(cp=>{
+      const diff = cp.balance - calcBankBalanceAsOf(cp.date);
+      const matched = Math.abs(diff) < 0.005;
+      const tx = {
+        id: cp.id, date: cp.date,
+        type: diff>0 ? 'income' : (matched ? 'income' : 'expense'),
+        category: diff>0 || matched ? 'Other Income' : 'Other Expense',
+        amount: matched ? 0 : Math.abs(diff),
+        notes: cp.notes || ('Auto-added to reconcile to target balance of '+fmt(cp.balance)),
+        isBalanceCheckpoint: true,
+        checkpointBalance: cp.balance
+      };
+      if(before[cp.id] !== tx.type+'|'+tx.amount+'|'+tx.date) changed++;
+      state.transactions.push(tx);
+    });
+    return {total:targets.length, changed};
+  } finally { _recomputingCheckpoints = false; }
+}
+async function saveTransactions(){ try{ recomputeCheckpoints(); }catch(e){ console.error('Checkpoint recompute failed', e); } try{ await storage.set('transactions', JSON.stringify(state.transactions)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
 async function saveLoans(){ try{ await storage.set('loans', JSON.stringify(state.loans)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
-async function saveSettings(){ try{ await storage.set('settings', JSON.stringify(state.settings)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
+async function saveSettings(){
+  /* Opening balance / plain bank checkpoints feed the reconcile adjustments, so refresh those too. */
+  try{ const r = recomputeCheckpoints(); if(r.changed) await storage.set('transactions', JSON.stringify(state.transactions)); }catch(e){ console.error('Checkpoint recompute failed', e); }
+  try{ await storage.set('settings', JSON.stringify(state.settings)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
 async function saveCategories(){ try{ await storage.set('categories', JSON.stringify(state.categories)); }catch(e){ showToast('Save failed — try again'); } if(cloudEnabled) cloudSaveAll(); }
 
 async function addTransaction(tx){ tx.id = uid(); state.transactions.push(tx); await saveTransactions(); showToast('Entry saved'); currentTab='dashboard'; render(); }
@@ -566,7 +603,7 @@ function cashDelta(t){
   if(t.type==='expense'||t.type==='loan_payment'||t.type==='lottery_expense') return -t.amount;
   return 0;
 }
-function sortedTx(){ return [...state.transactions].sort((a,b)=> a.date.localeCompare(b.date) || a.id.localeCompare(b.id)); }
+function sortedTx(){ return state.transactions.filter(t=>!(t.isBalanceCheckpoint && !t.amount)).sort((a,b)=> a.date.localeCompare(b.date) || a.id.localeCompare(b.id)); }
 
 /* Merge opening balance + checkpoints + transactions into one chronological
    timeline. A checkpoint resets the running balance to a known value (so you
@@ -1575,7 +1612,7 @@ function renderCheckpointList(){
   (state.settings.bankSnapshots||[]).forEach(c=> rows.push({date:c.date, account:'Bank account', detail:fmt(c.balance)+' (checkpoint)', editAttr:`data-editcheckpoint="bank::${c.id}"`, delAttr:`data-delcheckpoint="bank::${c.id}"`}));
   state.loans.forEach(l=> (l.snapshots||[]).forEach(c=> rows.push({date:c.date, account:l.name+' (loan)', detail:fmt(c.balance)+' (checkpoint)', editAttr:`data-editcheckpoint="${l.id}::${c.id}"`, delAttr:`data-delcheckpoint="${l.id}::${c.id}"`})));
   state.transactions.filter(t=>t.isBalanceCheckpoint).forEach(t=>{
-    rows.push({date:t.date, account:'Bank account', detail:'Target balance '+fmt(t.checkpointBalance)+' (adjusted '+(t.type==='income'?'+':'-')+fmt(t.amount)+')', editAttr:`data-editcheckpoint="banktx::${t.id}"`, delAttr:`data-del="${t.id}"`});
+    rows.push({date:t.date, account:'Bank account', detail:'Target balance '+fmt(t.checkpointBalance)+(t.amount?' (adjusted '+(t.type==='income'?'+':'-')+fmt(t.amount)+')':' (matches, no adjustment)'), editAttr:`data-editcheckpoint="banktx::${t.id}"`, delAttr:`data-del="${t.id}"`});
   });
   state.transactions.filter(t=>!t.isBalanceCheckpoint && (t.category==='Other Income'||t.category==='Other Expense')).forEach(t=>{
     const sign = t.category==='Other Income' ? '+' : '-';
@@ -1586,8 +1623,8 @@ function renderCheckpointList(){
   return `<table><thead><tr><th>Date</th><th>Account</th><th class="amt">Detail</th><th></th></tr></thead><tbody>
   ${rows.map(r=>`<tr><td>${r.date}</td><td>${r.account}</td><td class="amt">${r.detail}</td><td style="white-space:nowrap;"><button class="delbtn" ${r.editAttr} title="Edit">✎</button><button class="delbtn" ${r.delAttr} title="Delete">✕</button></td></tr>`).join('')}
   </tbody></table>
-  <div class="row" style="margin-top:12px;"><button class="btn btn-ghost" type="button" id="recomputeCheckpointsBtn" style="flex:0 0 auto; font-size:13px;">Recompute all balance checkpoints</button></div>
-  <p class="subnote" style="margin-top:8px;">If you edit an older balance, later adjustments were calculated against the old (wrong) number. Click "Recompute all" afterward to recalculate every adjustment fresh, in date order.</p>`;
+  <div class="row" style="margin-top:12px;"><button class="btn btn-ghost" type="button" id="recomputeCheckpointsBtn" style="flex:0 0 auto; font-size:13px;">Recompute now</button></div>
+  <p class="subnote" style="margin-top:8px;">Adjustments recalculate automatically whenever you add, edit, delete or import entries. This button is only a manual fallback.</p>`;
 }
 
 /* ============ PAGE: LOANS & SETUP ============ */
@@ -1963,6 +2000,7 @@ function attachHandlers(){
         const baseline = calcBankBalanceAsOf(date);
         const diff = balance - baseline;
         if(Math.abs(diff) < 0.005){
+          state.transactions.push({id: editingCheckpoint.id, date, type:'income', category:'Other Income', amount:0, notes:'Auto-added to reconcile to entered balance of '+fmt(balance), isBalanceCheckpoint:true, checkpointBalance:balance});
           saveTransactions().then(()=>{ showToast('Updated — balances now match without needing an adjustment'); editingCheckpoint=null; render(); });
         } else {
           const tx = {
@@ -2143,31 +2181,11 @@ function attachHandlers(){
   };
   const recomputeCheckpointsBtn = document.getElementById('recomputeCheckpointsBtn');
   if(recomputeCheckpointsBtn) recomputeCheckpointsBtn.onclick = ()=>{
-    showConfirm('Recompute every balance-checkpoint adjustment from scratch, in date order? This corrects any that went stale after an edit. Manually-added Other Income/Expense entries (not tied to a balance checkpoint) are left untouched.', ()=>{
-      const targets = state.transactions.filter(t=>t.isBalanceCheckpoint).map(t=>({date:t.date, balance:t.checkpointBalance}));
-      state.transactions = state.transactions.filter(t=>!t.isBalanceCheckpoint);
-      targets.sort((a,b)=> a.date.localeCompare(b.date));
-      let addedCount=0, matchedCount=0;
-      targets.forEach(cp=>{
-        const calculated = calcBankBalanceAsOf(cp.date);
-        const diff = cp.balance - calculated;
-        if(Math.abs(diff) < 0.005){ matchedCount++; return; }
-        state.transactions.push({
-          id: uid(), date: cp.date,
-          type: diff>0 ? 'income' : 'expense',
-          category: diff>0 ? 'Other Income' : 'Other Expense',
-          amount: Math.abs(diff),
-          notes: 'Auto-added to reconcile to target balance of '+fmt(cp.balance),
-          isBalanceCheckpoint: true,
-          checkpointBalance: cp.balance
-        });
-        addedCount++;
-      });
-      saveTransactions().then(()=>{
-        showToast(`Recomputed ${targets.length} checkpoints: ${addedCount} adjustment${addedCount===1?'':'s'}, ${matchedCount} matched exactly`);
-        render();
-      });
-    }, 'Recompute');
+    const r = recomputeCheckpoints();
+    saveTransactions().then(()=>{
+      showToast(r.changed ? `Recomputed: ${r.changed} adjustment${r.changed===1?'':'s'} updated` : 'All adjustments already up to date');
+      render();
+    });
   };
   const cloudConnectForm = document.getElementById('cloudConnectForm');
   if(cloudConnectForm) cloudConnectForm.onsubmit = (e)=>{
