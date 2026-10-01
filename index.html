@@ -171,7 +171,8 @@ td.amt, th.amt{text-align:right; font-family:'IBM Plex Mono',monospace;}
 .cardgroup summary::-webkit-details-marker{display:none;}
 .cardgroup summary .mgcaret{color:var(--muted); font-size:12px; transition:transform .15s; flex-shrink:0;}
 .cardgroup[open] summary .mgcaret{transform:rotate(90deg);}
-.cardgroup-body{padding:0 20px 20px;}
+.cardgroup-body{padding:0 20px 20px; overflow-x:auto;}
+.delbtn{min-width:32px; min-height:32px;}
 .danger-card{border-color:rgba(255,122,89,.35) !important;}
 
 .backup-banner{
@@ -200,6 +201,7 @@ td.amt, th.amt{text-align:right; font-family:'IBM Plex Mono',monospace;}
   #bottomnav .navitem{flex-direction:column; gap:3px; font-size:10px; padding:6px 4px; flex:1; text-align:center; border-radius:0; background:none !important;}
   #bottomnav .navitem.active{color:var(--loan);}
   #bottomnav .navdot{width:6px;height:6px;}
+  .hide-sm{display:none;}
   table{font-size:12.5px;}
   th,td{padding:7px 6px;}
   .barrow .barname{width:88px;}
@@ -1728,7 +1730,7 @@ function pageLoans(){
     </div>
   </details>
 
-  <details class="cardgroup monthgroup">
+  <details class="cardgroup monthgroup" ${editingCheckpoint?'open':''}>
     <summary><span class="mgcaret">▸</span><span class="mglabel">Balance checkpoints</span></summary>
     <div class="cardgroup-body">
     <p class="subnote" style="margin-bottom:12px;"><strong>Bank account:</strong> enter your real balance from your banking app on a given date. If it doesn't match what your entries add up to, the difference is automatically logged as an <strong>Other Income</strong> or <strong>Other Expense</strong> entry for that date — so the gap shows up in your reports instead of silently vanishing. If it already matches exactly, nothing is added (so there's nothing to find in the list below). Everything you've added — checkpoints and auto-adjustments alike — is listed below with edit/delete buttons.</p>
@@ -1782,7 +1784,7 @@ function pageLoans(){
     </div>
   </details>
 
-  <details class="cardgroup monthgroup">
+  <details class="cardgroup monthgroup" ${editingLoanId?'open':''}>
     <summary><span class="mgcaret">▸</span><span class="mglabel">${editingLoanId?'Edit loan':'Add a home loan'}</span></summary>
     <div class="cardgroup-body">
     <form id="loanForm">
@@ -1806,8 +1808,8 @@ function pageLoans(){
   <details class="cardgroup monthgroup">
     <summary><span class="mgcaret">▸</span><span class="mglabel">Your loans</span></summary>
     <div class="cardgroup-body">
-    ${state.loans.length? `<table><thead><tr><th>Name</th><th>Type</th><th class="amt">Opening</th><th class="amt">Current</th><th></th></tr></thead><tbody>
-    ${state.loans.map(l=>`<tr><td>${l.name}</td><td><span class="tag ${l.type==='investment'?'rental':'loan'}">${l.type==='investment'?'Investment':'Owner-occupied'}</span></td><td class="amt">${fmt(l.openingBalance)}</td><td class="amt">${fmt(loanBalance(l))}</td><td style="white-space:nowrap;"><button class="delbtn" data-editloan="${l.id}" title="Edit">✎</button><button class="delbtn" data-delloan="${l.id}" title="Delete">✕</button></td></tr>`).join('')}
+    ${state.loans.length? `<table><thead><tr><th>Name</th><th class="amt hide-sm">Opening</th><th class="amt">Current</th><th></th></tr></thead><tbody>
+    ${state.loans.map(l=>`<tr><td>${l.name}<div style="margin-top:4px;"><span class="tag ${l.type==='investment'?'rental':'loan'}">${l.type==='investment'?'Investment':'Owner-occupied'}</span></div></td><td class="amt hide-sm">${fmt(l.openingBalance)}</td><td class="amt">${fmt(loanBalance(l))}</td><td style="white-space:nowrap;"><button class="delbtn" data-editloan="${l.id}" title="Edit">✎</button><button class="delbtn" data-delloan="${l.id}" title="Delete">✕</button></td></tr>`).join('')}
     </tbody></table>` : '<div class="empty">No loans added yet.</div>'}
     </div>
   </details>
@@ -2006,7 +2008,7 @@ function attachHandlers(){
     }
   };
   document.querySelectorAll('[data-editloan]').forEach(el=>{
-    el.onclick = ()=>{ editingLoanId = el.dataset.editloan; render(); window.scrollTo(0,0); };
+    el.onclick = ()=>{ editingLoanId = el.dataset.editloan; render(); const f=document.getElementById('loanForm'); if(f) f.closest('details').scrollIntoView({block:'start'}); };
   });
   const cancelLoanEditBtn = document.getElementById('cancelLoanEditBtn');
   if(cancelLoanEditBtn) cancelLoanEditBtn.onclick = ()=>{ editingLoanId=null; render(); };
@@ -2075,7 +2077,7 @@ function attachHandlers(){
       editingCheckpoint = {account, id};
       currentTab = 'loans';
       render();
-      window.scrollTo(0,0);
+      const cf2 = document.getElementById('checkpointForm'); if(cf2) cf2.closest('details').scrollIntoView({block:'start'});
     };
   });
   const cancelCheckpointEditBtn = document.getElementById('cancelCheckpointEditBtn');
