@@ -84,6 +84,11 @@ label{display:block; font-size:12px; color:var(--muted); margin-bottom:5px; lett
 .stat .value.neg{color:var(--expense);}
 .pct{font-size:11px; opacity:.75; margin-top:2px;}
 .acts-m{display:none;}
+.calc-bar{display:flex; align-items:center; gap:10px; margin-top:6px; min-height:28px;}
+.calc-keys{display:inline-flex; gap:6px;}
+.calc-keys button{min-width:34px; height:28px; padding:0 8px; border-radius:8px; border:1px solid var(--line-strong); background:var(--surface-2); color:var(--text); font-size:15px; line-height:1; cursor:pointer;}
+.calc-keys button:active{border-color:var(--loan); color:var(--loan);}
+.calc-res{font-family:'IBM Plex Mono',monospace; font-size:13px; color:var(--income);}
 
 table{width:100%; border-collapse:collapse; font-size:14px;}
 th{text-align:left; color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.04em; padding:8px 10px; border-bottom:1px solid var(--line-strong);}
@@ -605,7 +610,7 @@ function recomputeCheckpoints(){
         id: cp.id, date: cp.date,
         type: diff>0 ? 'income' : (matched ? 'income' : 'expense'),
         category: diff>0 || matched ? 'Other Income' : 'Other Expense',
-        amount: matched ? 0 : Math.abs(diff),
+        amount: matched ? 0 : Math.round(Math.abs(diff)*100)/100,
         notes: cp.notes || ('Auto-added to reconcile to target balance of '+fmt(cp.balance)),
         isBalanceCheckpoint: true,
         checkpointBalance: cp.balance
@@ -1084,6 +1089,96 @@ function renderTxTable(list, deletable){
   }).join('')}
   </tbody></table>`;
 }
+
+/* ---- Amount fields accept simple maths: 12.50+7.25, 3*4.5, (10+5)/3, 2x3, 100-15 ---- */
+function evalExpr(str){
+  const src = String(str).replace(/[$,\s]/g,'').replace(/[×xX]/g,'*').replace(/÷/g,'/').replace(/[−–]/g,'-');
+  if(!src || /[^0-9.+\-*/()]/.test(src)) return null;
+  let i = 0;
+  const peek = ()=>src[i];
+  function number(){
+    const m = /^\d*\.?\d+|^\d+\.?/.exec(src.slice(i));
+    if(!m) throw 0; i += m[0].length; return parseFloat(m[0]);
+  }
+  function factor(){
+    if(peek()==='-'){ i++; return -factor(); }
+    if(peek()==='+'){ i++; return factor(); }
+    if(peek()==='('){ i++; const v = expr(); if(peek()!==')') throw 0; i++; return v; }
+    return number();
+  }
+  function term(){
+    let v = factor();
+    while(peek()==='*' || peek()==='/'){
+      const op = src[i++]; const r = factor();
+      if(op==='/'){ if(r===0) throw 0; v /= r; } else v *= r;
+    }
+    return v;
+  }
+  function expr(){
+    let v = term();
+    while(peek()==='+' || peek()==='-'){ const op = src[i++]; const r = term(); v = op==='+' ? v+r : v-r; }
+    return v;
+  }
+  try{
+    const v = expr();
+    if(i!==src.length || !isFinite(v)) return null;
+    return Math.round(v*100)/100;
+  }catch(e){ return null; }
+}
+function hasOperator(str){ return /[+*/×xX÷()]|.-/.test(String(str).replace(/\s/g,'')); }
+function showCalcResult(inp){
+  const out = inp.parentElement.querySelector('.calc-res'); if(!out) return;
+  const v = inp.value.trim();
+  if(v && hasOperator(v)){
+    const r = evalExpr(v);
+    out.textContent = r===null ? '' : '= ' + fmt(r);
+  } else out.textContent = '';
+}
+function settleCalcInput(inp){
+  const v = inp.value.trim();
+  if(v && hasOperator(v)){
+    const r = evalExpr(v);
+    if(r!==null) inp.value = String(r);
+  }
+  showCalcResult(inp);
+}
+function enhanceCalcInputs(){
+  document.querySelectorAll('input[data-calc]').forEach(inp=>{
+    if(inp.dataset.calcReady) return; inp.dataset.calcReady = '1';
+    const bar = document.createElement('div'); bar.className = 'calc-bar';
+    bar.innerHTML = '<span class="calc-keys"><button type="button" data-op="+">+</button><button type="button" data-op="-">−</button><button type="button" data-op="*">×</button><button type="button" data-op="/">÷</button></span><span class="calc-res"></span>';
+    inp.insertAdjacentElement('afterend', bar);
+    bar.querySelectorAll('button').forEach(btn=>{
+      btn.onmousedown = e=>e.preventDefault();
+      btn.onclick = ()=>{
+        const pos = inp.selectionStart!=null ? inp.selectionStart : inp.value.length;
+        const end = inp.selectionEnd!=null ? inp.selectionEnd : pos;
+        inp.value = inp.value.slice(0,pos) + btn.dataset.op + inp.value.slice(end);
+        inp.focus(); const np = pos+1; try{ inp.setSelectionRange(np,np); }catch(e){}
+        showCalcResult(inp);
+      };
+    });
+    inp.addEventListener('input', ()=>showCalcResult(inp));
+    inp.addEventListener('blur', ()=>settleCalcInput(inp));
+    inp.addEventListener('keydown', e=>{ if(e.key==='Enter') settleCalcInput(inp); });
+    showCalcResult(inp);
+  });
+}
+/* Before any form handler runs, turn typed maths into plain numbers (and reject unreadable amounts). */
+document.addEventListener('submit', e=>{
+  const bad = [];
+  e.target.querySelectorAll('input[data-calc]').forEach(inp=>{
+    const v = inp.value.trim(); if(!v) return;
+    const r = evalExpr(v);
+    if(r===null || (inp.hasAttribute('data-nonneg') && r<0)){ bad.push(inp); return; }
+    inp.value = String(r);
+  });
+  if(bad.length){
+    e.preventDefault(); e.stopImmediatePropagation();
+    showToast("Can't read that amount — use numbers with + − × ÷");
+    bad[0].focus();
+  }
+}, true);
 function escapeHtml(s){ const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
 function parseCSV(text){
   const rows = [];
@@ -1132,20 +1227,20 @@ function pageAdd(){
       ${addType==='expense' ? `
         <div class="field"><label>Category</label><select name="category" id="catSelect">${[...state.categories].sort((a,b)=>a.localeCompare(b)).map(c=>`<option ${v("category")===c?"selected":""}>${c}</option>`).join('')}<option value="__new__">+ Add new category…</option></select>
         <input type="text" name="newCategory" id="newCatInput" placeholder="New category name" style="display:none; margin-top:8px;"></div>
-        <div class="field"><label>Amount</label><input type="number" step="0.01" min="0" name="amount" required placeholder="0.00" value="${v('amount')}"></div>
+        <div class="field"><label>Amount</label><input type="text" inputmode="decimal" autocomplete="off" data-calc data-nonneg name="amount" required placeholder="0.00" value="${v('amount')}"></div>
       ` : ''}
 
       ${addType==='income' ? `
         <div class="field"><label>Category</label><select name="category" id="catSelect">${[...state.categories].sort((a,b)=>a.localeCompare(b)).map(c=>`<option ${v("category")===c?"selected":""}>${c}</option>`).join('')}<option value="__new__">+ Add new category…</option></select>
         <input type="text" name="newCategory" id="newCatInput" placeholder="New category name" style="display:none; margin-top:8px;"></div>
-        <div class="field"><label>Amount</label><input type="number" step="0.01" min="0" name="amount" required placeholder="0.00" value="${v('amount')}"></div>
+        <div class="field"><label>Amount</label><input type="text" inputmode="decimal" autocomplete="off" data-calc data-nonneg name="amount" required placeholder="0.00" value="${v('amount')}"></div>
       ` : ''}
 
       ${addType==='loan_payment' ? `
         ${invLoans.length? `
         <div class="field"><label>Home loan</label><select name="loanId">${invLoans.map(l=>`<option value="${l.id}" ${v('loanId')===l.id?'selected':''}>${l.name} (${l.type==='investment'?'Investment':'Owner-occupied'})</option>`).join('')}</select></div>
-        <div class="field"><label>Amount paid (principal + interest)</label><input type="number" step="0.01" min="0" name="amount" required placeholder="0.00" value="${v('amount')}"></div>
-        <div class="field"><label>Principal portion (optional)</label><input type="number" step="0.01" min="0" name="principal" placeholder="Leave blank if unknown" value="${v('principal')}">
+        <div class="field"><label>Amount paid (principal + interest)</label><input type="text" inputmode="decimal" autocomplete="off" data-calc data-nonneg name="amount" required placeholder="0.00" value="${v('amount')}"></div>
+        <div class="field"><label>Principal portion (optional)</label><input type="text" inputmode="decimal" autocomplete="off" data-calc data-nonneg name="principal" placeholder="Leave blank if unknown" value="${v('principal')}">
         <div class="subnote">Only the principal reduces your loan balance — interest doesn't. If you don't know the split, leave this blank: the payment still counts as an expense, but won't touch the loan balance. Instead, just add a <strong>balance checkpoint</strong> in Loans & Setup once a month with the real balance from your statement — which is exactly what you're already doing, and is the more reliable approach when the split is unknown.</div></div>
         ` : `<div class="empty">No loans set up yet. Go to <strong>Loans & Setup</strong> to add one first.</div>`}
       ` : ''}
@@ -1153,7 +1248,7 @@ function pageAdd(){
       ${addType==='rental_income' ? `
         ${invLoans.filter(l=>l.type==='investment').length? `
         <div class="field"><label>Investment property (linked loan)</label><select name="loanId">${invLoans.filter(l=>l.type==='investment').map(l=>`<option value="${l.id}" ${v('loanId')===l.id?'selected':''}>${l.name}</option>`).join('')}</select></div>
-        <div class="field"><label>Rental amount received</label><input type="number" step="0.01" min="0" name="amount" required placeholder="0.00" value="${v('amount')}"></div>
+        <div class="field"><label>Rental amount received</label><input type="text" inputmode="decimal" autocomplete="off" data-calc data-nonneg name="amount" required placeholder="0.00" value="${v('amount')}"></div>
         ` : `<div class="empty">No investment-property loans yet. Add one in <strong>Loans & Setup</strong> and tag it "Investment".</div>`}
       ` : ''}
 
@@ -1738,7 +1833,7 @@ function pageLoans(){
     <p class="subnote" style="margin-bottom:12px;">This is the earliest point your ledger knows about. If you have entries going back further, add a balance checkpoint below instead of moving this.</p>
     <form id="settingsForm">
       <div class="row">
-        <div class="field"><label>Opening balance</label><input type="number" step="0.01" name="bankOpeningBalance" value="${state.settings.bankOpeningBalance}"></div>
+        <div class="field"><label>Opening balance</label><input type="text" inputmode="decimal" autocomplete="off" data-calc name="bankOpeningBalance" value="${state.settings.bankOpeningBalance}"></div>
         <div class="field"><label>As of date</label><input type="date" name="bankOpeningDate" value="${state.settings.bankOpeningDate}"></div>
       </div>
       <button class="btn" type="submit">Save</button>
@@ -1757,7 +1852,7 @@ function pageLoans(){
           <option value="bank" ${editingCheckpoint&&(editingCheckpoint.account==='bank'||editingCheckpoint.account==='banktx')?'selected':''}>Bank account</option>
           ${state.loans.map(l=>`<option value="${l.id}" ${editingCheckpoint&&editingCheckpoint.account===l.id?'selected':''}>${l.name} (loan)</option>`).join('')}
         </select></div>
-        <div class="field"><label>Actual balance as of that date</label><input type="number" step="0.01" name="balance" placeholder="0.00" required value="${editingCheckpoint? findCheckpoint(editingCheckpoint).balance : ''}"></div>
+        <div class="field"><label>Actual balance as of that date</label><input type="text" inputmode="decimal" autocomplete="off" data-calc name="balance" placeholder="0.00" required value="${editingCheckpoint? findCheckpoint(editingCheckpoint).balance : ''}"></div>
         <div class="field"><label>Date</label><input type="date" name="date" value="${editingCheckpoint? findCheckpoint(editingCheckpoint).date : todayStr()}" required></div>
       </div>
       <div class="row">
@@ -1810,7 +1905,7 @@ function pageLoans(){
           <option value="occupied" ${editingLoanId && state.loans.find(l=>l.id===editingLoanId).type==='occupied'?'selected':''}>Owner-occupied</option>
           <option value="investment" ${editingLoanId && state.loans.find(l=>l.id===editingLoanId).type==='investment'?'selected':''}>Investment property</option>
         </select></div>
-        <div class="field"><label>Opening balance</label><input type="number" step="0.01" name="openingBalance" placeholder="0.00" required value="${editingLoanId? state.loans.find(l=>l.id===editingLoanId).openingBalance:''}"></div>
+        <div class="field"><label>Opening balance</label><input type="text" inputmode="decimal" autocomplete="off" data-calc name="openingBalance" placeholder="0.00" required value="${editingLoanId? state.loans.find(l=>l.id===editingLoanId).openingBalance:''}"></div>
         <div class="field"><label>Start date</label><input type="date" name="startDate" value="${editingLoanId? state.loans.find(l=>l.id===editingLoanId).startDate : todayStr()}"></div>
       </div>
       <div class="row">
@@ -1889,6 +1984,7 @@ function pageLoans(){
 
 /* ============ EVENT WIRING ============ */
 function attachHandlers(){
+  enhanceCalcInputs();
   document.querySelectorAll('[data-type]').forEach(el=>{
     el.onclick = ()=>{ addType = el.dataset.type; render(); };
   });
